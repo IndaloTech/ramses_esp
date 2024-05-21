@@ -37,7 +37,7 @@ static inline uint8_t cc1101_cfg_default( uint8_t *cfg ) {
     0xF8,  //  CC_MDMCFG0   Channel spacing 199.951 KHz
     0x50,  //  CC_DEVIATN
     0x07,  //  CC_MCSM2     default
-    0x30,  //  CC_MCSM1     default
+    0x10,  //  CC_MCSM1     CCA if RSSI below threshold
     0x18,  //  CC_MCSM0     Auto-calibrate on Idle to RX+TX, Power on timeout 149-155 uS
     0x16,  //  CC_FOCCFG    default
     0x6c,  //  CC_BSCFG     default
