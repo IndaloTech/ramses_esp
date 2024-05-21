@@ -62,5 +62,5 @@ void Radio_init( BaseType_t coreID ) {
 
   ctxt->coreID = coreID;
 
-  xTaskCreatePinnedToCore( Radio_Task,  "Radio",  4096, ctxt, 10, &ctxt->task, ctxt->coreID );
+  xTaskCreatePinnedToCore( Radio_Task,  "Radio",  4096, ctxt, 20, &ctxt->task, ctxt->coreID );
 }
