@@ -145,6 +145,8 @@ void cc_enter_rx_mode(void) {
 }
 
 void cc_enter_tx_mode(void) {
+  while ( CC_STATE( cc_strobe( CC_IDLE ) ) != CC_STATE_IDLE ){}
+
   cc_write( CC_PKTCTRL0, 0x02 );    // Fifo mode, infinite packet
   cc_write( CC_IOCFG0, 0x02 );      // Falling edge, TX Fifo low
 
