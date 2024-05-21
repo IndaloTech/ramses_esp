@@ -137,22 +137,22 @@ void cc_enter_idle_mode(void) {
 }
 
 void cc_enter_rx_mode(void) {
-  while ( CC_STATE( cc_strobe( CC_SIDLE ) ) != CC_STATE_IDLE ){}
+//  while ( CC_STATE( cc_strobe( CC_SIDLE ) ) != CC_STATE_IDLE ){}
 
   cc_write( CC_IOCFG0, 0x09 );      // Show Clear Channel Assessment
   cc_write( CC_PKTCTRL0, 0x32 );	// Asynchronous, infinite packet
 
-  cc_strobe( CC_SFRX );
+//  cc_strobe( CC_SFRX );
   while ( CC_STATE( cc_strobe( CC_SRX ) ) != CC_STATE_RX ){}
 }
 
 void cc_enter_tx_mode(void) {
-  while ( CC_STATE( cc_strobe( CC_SIDLE ) ) != CC_STATE_IDLE ){}
+//  while ( CC_STATE( cc_strobe( CC_SIDLE ) ) != CC_STATE_IDLE ){}
 
   cc_write( CC_PKTCTRL0, 0x02 );    // Fifo mode, infinite packet
   cc_write( CC_IOCFG0, 0x02 );      // Falling edge, TX Fifo low
 
-  cc_strobe( CC_SFTX );
+//  cc_strobe( CC_SFTX );
   while ( CC_STATE( cc_strobe( CC_STX ) ) != CC_STATE_TX ){}
 }
 
@@ -208,6 +208,7 @@ void cc_init(void) {
   for ( i=0 ; i<len ; i++ )
     cc_write( CC_PATABLE, param[i]);
 
+  cc_enter_idle_mode();
   cc_enter_rx_mode();
 }
 
