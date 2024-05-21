@@ -191,7 +191,6 @@ void cc_init(void) {
   cc_spi_init();
 
   cc_strobe(CC_SRES);
-  //cc_strobe(CC_SCAL);
 
   len = cc_cfg_get( 0, param, sizeof(param) );
   for ( i=0 ; i<len ; i++ )
@@ -204,6 +203,8 @@ void cc_init(void) {
     cc_write( CC_PATABLE, param[i]);
 
   cc_enter_idle_mode();
+  cc_strobe(CC_SCAL);
+
   cc_enter_rx_mode();
 }
 
