@@ -1,6 +1,9 @@
+set(component_srcs "message.c" "msg.c")
+
 idf_component_register(
-    SRCS message.c
-    INCLUDE_DIRS .
-    REQUIRES gateway frame
+    SRCS "${component_srcs}"
+    INCLUDE_DIRS "include"
+    PRIV_REQUIRES gateway frame
 )
+
 component_compile_options(-Wimplicit-fallthrough)

@@ -10,6 +10,8 @@
 #ifndef _MESSAGE_H_
 #define _MESSAGE_H_
 
+#include <stdint.h>
+
 #define _MSG_ERR_LIST \
   _MSG_ERR( MSG_SIG_ERR,      "Bad Signature" ) \
   _MSG_ERR( MSG_SYNC_ERR,     "Lost Sync" ) \
@@ -61,6 +63,10 @@ extern uint8_t msg_scan( struct message *msg, uint8_t byte );
 extern void msg_change_addr( struct message *msg,uint8_t addr, uint8_t id,uint32_t class , uint8_t myId,uint32_t myClass );  
 
 extern char const *msg_get_ts( struct message const  *msg );
+
+extern void msg_encode_address( uint8_t *addr, uint8_t  class, uint32_t  id );
+extern void msg_decode_address( uint8_t *addr, uint8_t *class, uint32_t *id );
+extern void msg_make_address( uint32_t *addr, uint8_t  class, uint32_t  id );
 
 extern void msg_init(void);
 extern void msg_work(void);

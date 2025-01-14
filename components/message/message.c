@@ -23,107 +23,15 @@ static const char * TAG = "MSG";
 #include "message.h"
 #include "frame.h"
 
+#include "msg.h"
+
 #define TRACE(_t)     ( 0 )
 #define DEBUG_MSG(_i) do{}while(0)
 
-/********************************************************
-** Message status
-********************************************************/
-enum message_state {
-  S_START,
-  S_HEADER,
-  S_ADDR0,
-  S_ADDR1,
-  S_ADDR2,
-  S_PARAM0,
-  S_PARAM1,
-  S_OPCODE,
-  S_LEN,
-  S_PAYLOAD,
-  S_CHECKSUM,
-  S_TRAILER,
-  S_COMPLETE,
-  S_ERROR
-};
 
-#define F_MASK  0x03
-#define F_RQ    0x00
-#define F_I     0x01
-#define F_W     0x02
-#define F_RP    0x03
-
-#define F_ADDR0  0x10
-#define F_ADDR1  0x20
-#define F_ADDR2  0x40
-
-#define F_PARAM0 0x04
-#define F_PARAM1 0x08
-#define F_RSSI   0x80
-
-// Only used for received fields
-#define F_OPCODE 0x01
-#define F_LEN    0x02
-
-#define MAX_RAW 162
-#define MAX_PAYLOAD 64
-struct message {
-  struct message *next;
-  struct message *prev;
-
-  uint8_t state;
-  uint8_t count;
-
-  uint8_t fields;  // Fields specified in header
-  uint8_t rxFields;  // Fields actually received
-  uint8_t error;
-
-  uint8_t addr[3][3];
-  uint8_t param[2];
-
-  uint8_t opcode[2];
-  uint8_t len;
-
-  uint8_t csum;
-  uint8_t rssi;
-
-  uint8_t nPayload;
-  uint8_t payload[MAX_PAYLOAD];
-
-  uint8_t nBytes;
-  uint8_t raw[MAX_RAW];
-
-#define MSG_TIMESTAMP 36
-  char timestamp[MSG_TIMESTAMP];
-};
-
-static void msg_reset( struct message *msg ) {
-  if( msg != NULL ) {
-    memset( msg, 0, sizeof(*msg) );
-  }
-}
-
-static char *msg_timestamp( char *timestamp, int len ) {
-  struct timeval tv;
-  struct tm *nowtm;
-  ssize_t written = -1;
-
-  gettimeofday(&tv, NULL);
-  nowtm = localtime(&tv.tv_sec);
-
-  written = (ssize_t)strftime( timestamp,len, "%Y-%m-%dT%H:%M:%S", nowtm);
-  if (( written>0 ) && ( (size_t)(written+7)<len ))
-    written += snprintf( timestamp+written, len-(size_t)written, ".%06ld", tv.tv_usec);
-  if (( written>0 ) && ( (size_t)(written+6)<len )) {
-	char tz[8];
-	strftime( tz,8, "%z", nowtm );
-	// strftime does not generate ISO 8601 timezone - there's no ':'
-	written += sprintf( timestamp+written,"%c%c%c:%c%c", tz[0],tz[1],tz[2],tz[3],tz[4] );
-  }
-
-  return timestamp;
-}
-
-char const *msg_get_ts( struct message const  *msg ){ return msg->timestamp; }
+#define _MSG_TYPE(_e,_t) _t,
+static char const * const MsgType[MSG_TYPE_MAX] = { _MSG_TYPE_LIST };
+#undef _MSG_TYPE
 
 /********************************************************
 ** Message lists
@@ -219,94 +127,6 @@ void msg_tx_ready( struct message **msg ) { msg_put( &tx_list, msg, 0 ); }
 static struct message *msg_tx_get(void) {  return msg_get( &tx_list ); }
 
 /********************************************************
-** Message Header
-********************************************************/
-static char const * const MsgType[4] = { "RQ", "I","W","RP" };
-
-
-#define F_OPTION ( F_ADDR0 + F_ADDR1 + F_ADDR2 + F_PARAM0 + F_PARAM1 )
-#define F_MAND   ( F_OPCODE + F_LEN )
-
-static const uint8_t address_flags[4] = {
-  F_ADDR0+F_ADDR1+F_ADDR2 ,
-                  F_ADDR2 ,
-  F_ADDR0+        F_ADDR2 ,
-  F_ADDR0+F_ADDR1
-};
-
-#define HDR_T_MASK 0x30
-#define HDR_T_SHIFT   4
-#define HDR_A_MASK 0x0C
-#define HDR_A_SHIFT   2
-#define HDR_PARAM0 0x02
-#define HDR_PARAM1 0x01
-
-static uint8_t get_hdr_flags(uint8_t header ) {
-  uint8_t flags;
-
-  flags = ( header & HDR_T_MASK ) >> HDR_T_SHIFT;   // Message type
-  flags |= address_flags[ ( header & HDR_A_MASK ) >> HDR_A_SHIFT ];
-  if( header & HDR_PARAM0 ) flags |= F_PARAM0;
-  if( header & HDR_PARAM1 ) flags |= F_PARAM1;
-
-  return flags;
-}
-
-static uint8_t get_header( uint8_t flags ) __attribute__((unused));
-static uint8_t get_header( uint8_t flags ) {
-  uint8_t i;
-
-  uint8_t header = 0xFF;
-  uint8_t addresses = flags & ( F_ADDR0+F_ADDR1+F_ADDR2 );
-
-  for( i=0 ; i<sizeof(address_flags) ; i++ ) {
-    if( addresses==address_flags[i] ) {
-      header = i << HDR_A_SHIFT;
-      header |= ( flags & F_MASK ) << HDR_T_SHIFT;  // Message type
-      if( flags & F_PARAM0 ) header |= HDR_PARAM0;
-      if( flags & F_PARAM1 ) header |= HDR_PARAM1;
-      break;
-    }
-  }
-
-  return header;
-}
-
-/********************************************************
-** General utilities
-********************************************************/
-static uint8_t msg_checksum( struct message *msg ) {
-  uint8_t csum;
-  uint8_t i,j;
-
-  // Missing fields will be zero so we can just add them to checksum without testing presence
-                                                  { csum  = get_header(msg->fields); }
-  for( i=0 ; i<3 ; i++ ) { for( j=0 ; j<3 ; j++ ) { csum += msg->addr[i][j]; }       }
-  for( i=0 ; i<2 ; i++ )                          { csum += msg->param[i];           }
-  for( i=0 ; i<2 ; i++ )                          { csum += msg->opcode[i];          }
-                                                  { csum += msg->len;                }
-  for( i=0 ; i<msg->nPayload ; i++ )              { csum += msg->payload[i];         }
-
-  return -csum;
-}
-
-static void msg_set_address( uint8_t *addr, uint8_t class, uint32_t id ) {
-  addr[0] = ( ( class<< 2 ) & 0xFC ) | ( ( id >> 16 ) & 0x03 );
-  addr[1] =                            ( ( id >>  8 ) & 0xFF );
-  addr[2] =                            ( ( id       ) & 0xFF );
-}
-
-static void msg_get_address( uint8_t *addr, uint8_t *class, uint32_t *id ) {
-  uint8_t Class =          ( addr[0] & 0xFC ) >>  2;
-  uint32_t Id =  (uint32_t)( addr[0] & 0x03 ) << 16
-               | (uint32_t)( addr[1]        ) <<  8
-               | (uint32_t)( addr[2]        )       ;
-
-  if( class ) (*class) = Class;
-  if( id    ) (*id   ) = Id;
-}
-
-/********************************************************
 ** Message Print
 ********************************************************/
 #define sprintf_P sprintf
@@ -338,7 +158,7 @@ static uint8_t msg_print_addr( char *str, uint8_t *addr, uint8_t valid ) {
   if( valid ) {
     uint8_t class;
     uint32_t id;
-	msg_get_address( addr, &class,&id );
+	msg_decode_address( addr, &class,&id );
 
     n = sprintf_P(str, PSTR("%02hu:%06lu "), class, id );
   } else {
@@ -584,13 +404,14 @@ uint8_t msg_print_all( struct message *msg, char *msg_buff ) {
 
   return len;
 }
+
 /********************************************************
 ** RX Message processing
 ********************************************************/
 static uint8_t msg_rx_header( struct message *msg, uint8_t byte ) {
   uint8_t state = S_ADDR0;
 
-  msg->fields = get_hdr_flags( byte );
+  msg->fields = msg_decode_header( byte );
 
   ESP_LOGD( TAG, "HDR %02x", msg->fields);
 
@@ -751,7 +572,6 @@ void msg_rx_end( uint8_t nBytes, uint8_t error ) {
   DEBUG_MSG(0);
 }
 
-#if 1
 /********************************************************
 ** TX Message scan
 ********************************************************/
@@ -780,9 +600,9 @@ void msg_change_addr( struct message *msg, uint8_t addr, uint8_t Class,uint32_t 
 	uint8_t class;
 	uint32_t id;
 
-	msg_get_address( Addr, &class, &id );
+	msg_decode_address( Addr, &class, &id );
 	if( class==Class && id==Id ) // address matches
-	  msg_set_address( Addr, myClass, myId ); 
+	  msg_encode_address( Addr, myClass, myId );
   }
 }
 
@@ -795,7 +615,7 @@ static uint8_t msg_scan_addr( struct message *msg, char *str, uint8_t nChar ) {
     uint32_t id;
 
   	if( nChar<11 && 2==sscanf( str, "%hhu:%lu", &class, &id ) ) {
-	  msg_set_address( msg->addr[addr], class, id );
+	  msg_encode_address( msg->addr[addr], class, id );
       msg->fields |= F_ADDR0 << addr;
       ok = 1;
     } 
@@ -961,7 +781,7 @@ static uint8_t msg_tx_header( struct message *msg, uint8_t *done ) {
   uint8_t byte = 0;
 
   if( msg->count < 1 ) {
-    byte = get_header( msg->fields );
+    byte = msg_encode_header( msg->fields );
     msg->count++;
   } else {
     msg->count = 0;
@@ -1131,30 +951,6 @@ void msg_tx_done(void) {
     // Echo what we transmitted
     msg_rx_ready( &TxMsg );
   }
-}
-#endif
-/************************************************************************************
-**
-** Message status functions
-**/
-uint8_t msg_isValid( struct message *msg ) {
-  uint8_t isValid = 0;
-  
-  if( msg ) {
-	isValid = ( msg->error==MSG_OK );
-  }
-  
-  return isValid;
-}
-
-uint8_t msg_isTx( struct message *msg ) {
-  uint8_t isTx = 0;
-  
-  if( msg ) {
-	isTx = msg_isValid( msg ) && ( msg->rssi==0 );
-  }
-
-  return isTx;
 }
 
 /************************************************************************************
