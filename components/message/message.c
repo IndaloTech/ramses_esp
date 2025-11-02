@@ -64,8 +64,8 @@ enum message_state {
 #define F_OPCODE 0x01
 #define F_LEN    0x02
 
-#define MAX_RAW 162
-#define MAX_PAYLOAD 64
+#define MAX_RAW CONFIG_MAX_RAW
+#define MAX_PAYLOAD CONFIG_MAX_PAYLOAD
 struct message {
   struct message *next;
   struct message *prev;

@@ -13,6 +13,20 @@ menu "Message Configuration"
         	4=Debug
         	5=Verbose
 
+    config MAX_PAYLOAD
+        int "May payload length"
+        range 64 128
+        default 96
+        help
+            Maximum message payload bytes.
+    
+    config MAX_RAW
+        int "May Raw Data Bytes"
+        range 162 256
+        default 220
+        help
+            Maximum message payload bytes.
+
     config N_MSG
         int "Pre-allocated messages"
         range 0 16
