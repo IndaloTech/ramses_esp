@@ -9,6 +9,7 @@
  */
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 
@@ -261,6 +262,7 @@ static struct tz {
 
 static void net_timezone( char const *tz ) {
   setenv("TZ", tz,1);
+  tzset();
 }
 
 static char const *find_timezone( char const *zone ) {
