@@ -251,11 +251,11 @@ static struct tz {
 	char const *tz_str;
 } const tz_list[] = {
 	// List of timezones where ramses_esp is likely to be used
-  { "GMT", "GMT0BST-1,M3.5.0/01,M10.5.0/02"},
-  { "CET", "CET-1CEST-2,M3.5.0/02,M10.5.0/03"},
-  { "EET", "EET-2EEST-3,M3.5.0/03,M10.5.0/04"},
-  { "WET", "WET0WEST-1,M3.5.0/01,M10.5.0/02"},
-  { "IST", "IST-1GMT0,M10.5.0/02,M3.5.0/01"},
+  { "GMT", "GMT0BST-1,M3.5.0/1,M10.5.0/2"},
+  { "CET", "CET-1CEST-2,M3.5.0/2,M10.5.0/3"},
+  { "EET", "EET-2EEST-3,M3.5.0/3,M10.5.0/4"},
+  { "WET", "WET0WEST-1,M3.5.0/1,M10.5.0/2"},
+  { "IST", "IST-1GMT0,M10.5.0/2,M3.5.0/1"},
   { NULL, NULL }
 };
 
