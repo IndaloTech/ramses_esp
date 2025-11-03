@@ -69,6 +69,7 @@ struct mqtt_data {
   esp_mqtt_client_config_t cfg;
   esp_mqtt_client_handle_t client;
 
+  uint8_t connected;
   uint8_t info;
 };
 
@@ -87,6 +88,7 @@ static struct mqtt_data *mqtt_ctxt( void ) {
 		.keepalive=20,
       },
     },
+	.connected = 0,
 	.info = 0,
   };
 
@@ -322,12 +324,20 @@ static void mqtt_event_handler( void *handler_args, esp_event_base_t base, int32
   case MQTT_EVENT_CONNECTED:
     ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
     mqtt_set_state( ctxt, MQTT_CONNECTED );
+
+    // Remember we were actually connected to avoid reboot loop
+    ctxt->connected = 1;
     break;
 
   case MQTT_EVENT_DISCONNECTED:
     ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
-    printf("# MQTT: Disonnected\n");
-    esp_restart();
+
+    // If we were connected to broker just do a system restart to make sure everything is cleaned up
+    if( ctxt->connected ) {
+      printf("# MQTT: Disonnected\n");
+      esp_restart();
+    }
+
     break;
 
   case MQTT_EVENT_SUBSCRIBED:
@@ -347,7 +357,7 @@ static void mqtt_event_handler( void *handler_args, esp_event_base_t base, int32
 	break;
 
   case MQTT_EVENT_ERROR:
-    ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
+    ESP_LOGW(TAG, "MQTT_EVENT_ERROR");
     if( event->error_handle->error_type==MQTT_ERROR_TYPE_TCP_TRANSPORT ) {
       log_error_if_nonzero("reported from esp-tls", event->error_handle->esp_tls_last_esp_err);
       log_error_if_nonzero("reported from tls stack", event->error_handle->esp_tls_stack_err);
@@ -357,7 +367,7 @@ static void mqtt_event_handler( void *handler_args, esp_event_base_t base, int32
     break;
 
   default:
-    ESP_LOGI(TAG, "Other event id:%d", event->event_id);
+    ESP_LOGW(TAG, "Other event id:%d", event->event_id);
     break;
   }
 }
@@ -390,6 +400,7 @@ static void mqtt_state_machine( struct mqtt_data *ctxt ) {
     break;
 
   case MQTT_STARTING:
+    // Just wait for the CONNECTED event
 	break;
 
   case MQTT_CONNECTED:
