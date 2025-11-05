@@ -62,6 +62,16 @@ static int ota_cmd_force( int argc, char **argv ) {
 }
 
 /*********************************************************
+ * check command
+ */
+static int ota_cmd_check( int argc, char **argv ) {
+
+  ota_check();
+
+  return 0;
+}
+
+/*********************************************************
  * Top Level command
  */
 static esp_console_cmd_t const ota_cmds[] = {
@@ -94,6 +104,12 @@ static esp_console_cmd_t const ota_cmds[] = {
     .help = "Force OTA",
     .hint = NULL,
     .func = ota_cmd_force,
+  },
+  {
+    .command = "check",
+    .help = "Get latest version",
+    .hint = NULL,
+    .func = ota_cmd_check,
   },
   // List termination
   { NULL_COMMAND }

@@ -184,6 +184,24 @@ static void mqtt_publish_info( struct mqtt_data *ctxt ) {
   }
 }
 
+static void publish_latest( struct mqtt_data *ctxt, char const *latest ) {
+  char topic[64];
+
+  sprintf( topic, "%s/info/latest", ctxt->topic );
+  esp_mqtt_client_publish( ctxt->client,topic, latest, 0, 1, 1);
+
+}
+
+void MQTT_publish_latest( char const *latest ) {
+  struct mqtt_data *ctxt= mqtt_ctxt();
+
+  if( ctxt->state == MQTT_ACTIVE ) {
+    publish_latest( ctxt, latest );
+  }
+
+}
+
+
 /*******************************************************************************
  * RX message
  */
