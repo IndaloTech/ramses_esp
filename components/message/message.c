@@ -413,6 +413,9 @@ static char const *msg_error_str( uint8_t error )
 static uint8_t msg_print_error( char *str, uint8_t error ) {
   uint8_t n = 0;
 
+  if( error )
+    n = sprintf(str, " * %s", msg_error_str(error) );
+
   return n;
 }
 
