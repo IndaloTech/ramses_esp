@@ -196,6 +196,51 @@ void frame_rx_byte( uint8_t b ) {
 
   case FRM_RX_MESSAGE:
     if( b == ramses_tlr[0] ) {
+      if( rxFrm.count ) {
+        rxFrm.state = FRM_RX_ABORT;
+        rxFrm.msgErr = MSG_WARNING;
+        ESP_LOGE( TAG, "Odd byte before TLR");
+      }
+      rxFrm.state = FRM_RX_DONE;
+      ESP_LOGI( TAG, "DONE msg=%d",rxFrm.nBytes );
+    } else {
+      ESP_LOGD( TAG, "raw[%d]=%02x",rxFrm.nBytes, b );
+      rxFrm.raw[rxFrm.nBytes++] = b;
+
+      // Count MC Pair
+      rxFrm.count = 1- rxFrm.count;
+
+      // When the pair is complete check it
+      if( !rxFrm.count ) {
+    	uint8_t mc1=rxFrm.raw[rxFrm.nBytes-2], mc2=rxFrm.raw[rxFrm.nBytes-1];
+
+        if( !manchester_code_valid( mc1 ) ) {
+          rxFrm.state = FRM_RX_ABORT;
+          rxFrm.msgErr = MSG_MANC_ERR;
+          ESP_LOGE( TAG, "raw[%d]=%02x (MC)",rxFrm.nBytes-2, mc1 );
+        } else if( !manchester_code_valid( mc2 ) ) {
+          rxFrm.state = FRM_RX_ABORT;
+          rxFrm.msgErr = MSG_MANC_ERR;
+          ESP_LOGE( TAG, "raw[%d]=%02x (MC)",rxFrm.nBytes-1, mc2 );
+        } else {
+          // Have a valid MC pair - process them
+          rxFrm.msgByte = manchester_decode( mc1 );
+          rxFrm.msgByte <<= 4;
+          rxFrm.msgByte |= manchester_decode( mc2 );
+
+          rxFrm.msgErr = msg_rx_byte( rxFrm.msgByte );
+          if( rxFrm.msgErr != MSG_OK ) {
+            ESP_LOGE( TAG, "raw[%d,+1]=%02x:%02x (MSG)",rxFrm.nBytes-2, mc1,mc2 );
+            rxFrm.state = FRM_RX_ABORT;
+          }
+        }
+      }
+    }
+    break;
+
+#if 0
+  case FRM_RX_MESSAGE:
+    if( b == ramses_tlr[0] ) {
 	  rxFrm.state = FRM_RX_DONE;
       ESP_LOGI( TAG, "DONE raw=%d msg=%d",rxFrm.nBytes, 1 );
     } else {
@@ -227,6 +272,7 @@ void frame_rx_byte( uint8_t b ) {
       }
     }
     break;
+#endif
 
   case FRM_RX_DONE:
   case FRM_RX_ABORT:

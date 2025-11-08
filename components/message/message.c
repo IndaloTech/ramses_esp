@@ -659,10 +659,12 @@ static uint8_t msg_rx_payload( struct message *msg, uint8_t byte ) {
   }
 
   msg->count++;
+#if 0
   if( msg->count==msg->len ) {
     msg->count = 0;
     state = S_CHECKSUM;
   }
+#endif
 
   return state;
 }
@@ -738,10 +740,16 @@ void msg_rx_end( uint8_t nBytes, uint8_t error ) {
   msgRx->nBytes = nBytes;
 
   if( error==MSG_OK ) {
+    if( msgRx->csum != 0 ) {
+      error = MSG_TRUNC_ERR;
+    } else {
+      msgRx->nPayload--;  // Remove checksum from payload count
+    }
+
     // All optional fields received as expected?
     if(   ( ( msgRx->rxFields & F_OPTION ) != ( msgRx->fields & F_OPTION ) )
        || ( ( msgRx->rxFields & F_MAND   ) != F_MAND  )
-       || ( msgRx->len != msgRx->nPayload ) ) {
+       || ( msgRx->len > msgRx->nPayload ) ) {
        error = MSG_TRUNC_ERR;
     }
   }
