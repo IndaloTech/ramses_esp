@@ -756,7 +756,7 @@ void msg_rx_end( uint8_t nBytes, uint8_t error ) {
   msgRx->nBytes = nBytes;
 
   if( error==MSG_OK ) {
-	if( msgRx->protocol != RAMSES_2 ) {
+	if( msgRx->protocol == RAMSES_2 ) {
      if( msgRx->csum != 0 ) {
        error = MSG_CSUM_ERR;
      } else {
