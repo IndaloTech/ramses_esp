@@ -73,7 +73,9 @@ struct message {
   uint8_t state;
   uint8_t count;
 
-  uint8_t fields;  // Fields specified in header
+  uint8_t protocol;	 // RAMSES protocol version
+
+  uint8_t fields;    // Fields specified in header
   uint8_t rxFields;  // Fields actually received
   uint8_t error;
 
@@ -95,6 +97,9 @@ struct message {
 #define MSG_TIMESTAMP 36
   char timestamp[MSG_TIMESTAMP];
 };
+
+#define RAMSES_2 2
+#define RAMSES_3 3
 
 static void msg_reset( struct message *msg ) {
   if( msg != NULL ) {
@@ -240,6 +245,16 @@ static const uint8_t address_flags[4] = {
 #define HDR_A_SHIFT   2
 #define HDR_PARAM0 0x02
 #define HDR_PARAM1 0x01
+#define HDR_RF3    0x80
+
+static uint8_t get_hdr_protocol(uint8_t header ) {
+  uint8_t protocol = RAMSES_2;
+
+  if( header & HDR_RF3 )
+    protocol = RAMSES_3;
+
+  return protocol;
+}
 
 static uint8_t get_hdr_flags(uint8_t header ) {
   uint8_t flags;
@@ -249,7 +264,7 @@ static uint8_t get_hdr_flags(uint8_t header ) {
   if( header & HDR_PARAM0 ) flags |= F_PARAM0;
   if( header & HDR_PARAM1 ) flags |= F_PARAM1;
 
-  return flags;
+   return flags;
 }
 
 static uint8_t get_header( uint8_t flags ) __attribute__((unused));
@@ -593,6 +608,7 @@ uint8_t msg_print_all( struct message *msg, char *msg_buff ) {
 static uint8_t msg_rx_header( struct message *msg, uint8_t byte ) {
   uint8_t state = S_ADDR0;
 
+  msg->protocol = get_hdr_protocol( byte );
   msg->fields = get_hdr_flags( byte );
 
   ESP_LOGD( TAG, "HDR %02x", msg->fields);
@@ -740,17 +756,25 @@ void msg_rx_end( uint8_t nBytes, uint8_t error ) {
   msgRx->nBytes = nBytes;
 
   if( error==MSG_OK ) {
-    if( msgRx->csum != 0 ) {
-      error = MSG_TRUNC_ERR;
-    } else {
-      msgRx->nPayload--;  // Remove checksum from payload count
+	if( msgRx->protocol != RAMSES_2 ) {
+     if( msgRx->csum != 0 ) {
+       error = MSG_CSUM_ERR;
+     } else {
+       msgRx->nPayload--;  // Remove checksum from payload count
+     }
+	} else {
+      ESP_LOGW(TAG, "RF-3 message - Checksum not verified");
     }
 
     // All optional fields received as expected?
     if(   ( ( msgRx->rxFields & F_OPTION ) != ( msgRx->fields & F_OPTION ) )
-       || ( ( msgRx->rxFields & F_MAND   ) != F_MAND  )
-       || ( msgRx->len > msgRx->nPayload ) ) {
-       error = MSG_TRUNC_ERR;
+       || ( ( msgRx->rxFields & F_MAND   ) != F_MAND  ) )
+     error = MSG_TRUNC_ERR;
+
+    switch( msgRx->protocol ) {
+      case RAMSES_2: if( msgRx->len != msgRx->nPayload   ) error = MSG_TRUNC_ERR;  break;
+      case RAMSES_3: if( msgRx->len != msgRx->nPayload-1 ) error = MSG_TRUNC_ERR;  break;
+      default: break;
     }
   }
 
