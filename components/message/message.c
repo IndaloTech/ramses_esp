@@ -56,9 +56,10 @@ enum message_state {
 #define F_ADDR1  0x20
 #define F_ADDR2  0x40
 
-#define F_PARAM0 0x04
-#define F_PARAM1 0x08
-#define F_RSSI   0x80
+#define F_PARAM0  0x04
+#define F_PARAM1  0x08
+#define F_RAMSES3 0x80
+#define F_RSSI   0x800
 
 // Only used for received fields
 #define F_OPCODE 0x01
@@ -75,7 +76,7 @@ struct message {
 
   uint8_t protocol;	 // RAMSES protocol version
 
-  uint8_t fields;    // Fields specified in header
+  uint16_t fields;   // Fields specified in header
   uint8_t rxFields;  // Fields actually received
   uint8_t error;
 
@@ -97,9 +98,6 @@ struct message {
 #define MSG_TIMESTAMP 36
   char timestamp[MSG_TIMESTAMP];
 };
-
-#define RAMSES_2 2
-#define RAMSES_3 3
 
 static void msg_reset( struct message *msg ) {
   if( msg != NULL ) {
@@ -247,28 +245,20 @@ static const uint8_t address_flags[4] = {
 #define HDR_PARAM1 0x01
 #define HDR_RF3    0x80
 
-static uint8_t get_hdr_protocol(uint8_t header ) {
-  uint8_t protocol = RAMSES_2;
-
-  if( header & HDR_RF3 )
-    protocol = RAMSES_3;
-
-  return protocol;
-}
-
-static uint8_t get_hdr_flags(uint8_t header ) {
-  uint8_t flags;
+static uint16_t get_hdr_flags(uint8_t header ) {
+  uint16_t flags;
 
   flags = ( header & HDR_T_MASK ) >> HDR_T_SHIFT;   // Message type
   flags |= address_flags[ ( header & HDR_A_MASK ) >> HDR_A_SHIFT ];
   if( header & HDR_PARAM0 ) flags |= F_PARAM0;
   if( header & HDR_PARAM1 ) flags |= F_PARAM1;
+  if( header & HDR_RF3    ) flags |= F_RAMSES3;
 
    return flags;
 }
 
-static uint8_t get_header( uint8_t flags ) __attribute__((unused));
-static uint8_t get_header( uint8_t flags ) {
+static uint8_t get_header( uint16_t flags ) __attribute__((unused));
+static uint8_t get_header( uint16_t flags ) {
   uint8_t i;
 
   uint8_t header = 0xFF;
@@ -278,8 +268,9 @@ static uint8_t get_header( uint8_t flags ) {
     if( addresses==address_flags[i] ) {
       header = i << HDR_A_SHIFT;
       header |= ( flags & F_MASK ) << HDR_T_SHIFT;  // Message type
-      if( flags & F_PARAM0 ) header |= HDR_PARAM0;
-      if( flags & F_PARAM1 ) header |= HDR_PARAM1;
+      if( flags & F_PARAM0  ) header |= HDR_PARAM0;
+      if( flags & F_PARAM1  ) header |= HDR_PARAM1;
+      if( flags & F_RAMSES3 ) header |= HDR_RF3;
       break;
     }
   }
@@ -293,6 +284,12 @@ static uint8_t get_header( uint8_t flags ) {
 static uint8_t msg_checksum( struct message *msg ) {
   uint8_t csum;
   uint8_t i,j;
+
+  // HACK for checksum attached to payload
+  if( msg->fields & F_RAMSES3 ) {
+	csum = msg->payload[--msg->nPayload];
+    return csum;
+  }
 
   // Missing fields will be zero so we can just add them to checksum without testing presence
                                                   { csum  = get_header(msg->fields); }
@@ -327,7 +324,7 @@ static void msg_get_address( uint8_t *addr, uint8_t *class, uint32_t *id ) {
 #define sprintf_P sprintf
 #define PSTR(_s) _s
 
-static uint8_t msg_print_rssi( char *str, uint8_t rssi, uint8_t valid ) {
+static uint8_t msg_print_rssi( char *str, uint8_t rssi, uint16_t valid ) {
   uint8_t n = 0;
 
   if( valid ) {
@@ -342,7 +339,13 @@ static uint8_t msg_print_rssi( char *str, uint8_t rssi, uint8_t valid ) {
 static uint8_t msg_print_type( char *str, uint8_t type ) {
   uint8_t n = 0;
 
- n = sprintf_P( str,PSTR("%2s "),MsgType[type] );
+  uint8_t rf3 = ( type & F_RAMSES3 );
+
+  n = sprintf_P( str,PSTR("%2s"),MsgType[ type & ~F_RAMSES3] );
+  if( rf3 ) str[n++] = '*';
+  str[n++] = ' ';
+
+  str[n] = '\0';
 
   return n;
 }
@@ -465,7 +468,7 @@ static uint8_t msg_print_field( struct message *msg, char *buff ) {
     /* fallthrough */
 
   case S_HEADER:
-    nBytes = msg_print_type( buff, msg->fields & F_MASK );
+    nBytes = msg_print_type( buff, msg->fields & ( F_MASK || F_RAMSES3 ) );
     msg->state = S_PARAM0;
     if( nBytes )
       break;
@@ -608,7 +611,6 @@ uint8_t msg_print_all( struct message *msg, char *msg_buff ) {
 static uint8_t msg_rx_header( struct message *msg, uint8_t byte ) {
   uint8_t state = S_ADDR0;
 
-  msg->protocol = get_hdr_protocol( byte );
   msg->fields = get_hdr_flags( byte );
 
   ESP_LOGD( TAG, "HDR %02x", msg->fields);
@@ -756,13 +758,15 @@ void msg_rx_end( uint8_t nBytes, uint8_t error ) {
   msgRx->nBytes = nBytes;
 
   if( error==MSG_OK ) {
-	if( msgRx->protocol == RAMSES_2 ) {
+	if( !(msgRx->fields & F_RAMSES3 ) ) {
+	 // RAMSES_2
      if( msgRx->csum != 0 ) {
        error = MSG_CSUM_ERR;
      } else {
        msgRx->nPayload--;  // Remove checksum from payload count
      }
 	} else {
+	  // RAMSES-3 leave checksum at end of payload
       ESP_LOGW(TAG, "RF-3 message - Checksum not verified");
     }
 
@@ -771,10 +775,10 @@ void msg_rx_end( uint8_t nBytes, uint8_t error ) {
        || ( ( msgRx->rxFields & F_MAND   ) != F_MAND  ) )
      error = MSG_TRUNC_ERR;
 
-    switch( msgRx->protocol ) {
-      case RAMSES_2: if( msgRx->len != msgRx->nPayload   ) error = MSG_TRUNC_ERR;  break;
-      case RAMSES_3: if( msgRx->len != msgRx->nPayload-1 ) error = MSG_TRUNC_ERR;  break;
-      default: break;
+	if( !(msgRx->fields & F_RAMSES3 ) ) {
+      /* RAMSES_2: */ if( msgRx->len != msgRx->nPayload   ) error = MSG_TRUNC_ERR;
+	} else {
+      /* RAMSES_3: */ if( msgRx->len != msgRx->nPayload-1 ) error = MSG_TRUNC_ERR;
     }
   }
 
@@ -792,15 +796,23 @@ void msg_rx_end( uint8_t nBytes, uint8_t error ) {
 ********************************************************/
 static uint8_t msg_scan_header( struct message *msg, char *str, uint8_t nChar ) {
   uint8_t ok = 0;
-  uint8_t msgType;
+  uint16_t msgType;
+
+  // Identify RAMSES-3 message
+  uint16_t rf3 = 0;
+  if( str[ nChar-2 ]=='*' ) {
+    rf3 = F_RAMSES3;
+    str[ nChar-1 ] = '\0';
+  }
 
   // Cheap conversion to upper for acceptable characters
-  while( --nChar )
+  while( --nChar ) {
     str[ nChar-1 ] &= ~( 'A'^'a' );
+  }
 
   for( msgType=F_RQ ; msgType<=F_RP ; msgType++ ) {
     if( 0==strcmp( str, MsgType[msgType] ) ) {
-      msg->fields = msgType;
+      msg->fields = msgType | rf3 ;
 	  ok = 1;
       break;
     }
