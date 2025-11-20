@@ -285,7 +285,8 @@ static uint8_t msg_checksum( struct message *msg ) {
 
   // HACK for checksum attached to payload
   if( msg->fields & F_RAMSES3 ) {
-	csum = msg->payload[--msg->nPayload];
+	csum = msg->payload[msg->nPayload-1];
+	ESP_LOGI(TAG, "TX CSUM=%02x (%d)",csum,msg->nPayload);
     return csum;
   }
 
@@ -1007,6 +1008,7 @@ static uint8_t msg_tx_header( struct message *msg, uint8_t *done ) {
 
   if( msg->count < 1 ) {
     byte = get_header( msg->fields );
+    ESP_LOGI(TAG, "TX HDR=%02x",byte);
     msg->count++;
   } else {
     msg->count = 0;
@@ -1024,6 +1026,7 @@ static uint8_t msg_tx_addr( struct message *msg, uint8_t *done ) {
   if( msg->fields & ( F_ADDR0 << addr ) ) {
     if( msg->count < 3 ) {
       byte = msg->addr[ addr ][ msg->count ];
+      ESP_LOGI(TAG, "TX ADDR[%d][%d]=%02x",addr,msg->count,byte);
       msg->count++;
     } else {
       msg->count = 0;
@@ -1042,6 +1045,7 @@ static uint8_t msg_tx_param( struct message *msg, uint8_t *done  ) {
   if( msg->fields & ( F_PARAM0 << param ) ) {
     if( msg->count < 1 ) {
       byte = msg->param[ param ];
+      ESP_LOGI(TAG, "TX PARAM[%d]=%02x",param,byte);
       msg->count++;
     } else {
       msg->count = 0;
@@ -1058,6 +1062,7 @@ static uint8_t msg_tx_opcode( struct message *msg, uint8_t *done ) {
 
   if( msg->count < 2 ) {
     byte = msg->opcode[ msg->count ];
+    ESP_LOGI(TAG, "TX OPCODE[%d]=%02x",msg->count,byte);
     msg->count++;
   } else {
     msg->count = 0;
@@ -1073,6 +1078,7 @@ static uint8_t msg_tx_len( struct message *msg, uint8_t *done ) {
 
   if( msg->count < 1 ) {
     byte = msg->len;
+	ESP_LOGI(TAG, "TX len=%03d",byte);
     msg->count++;
   } else {
     msg->count = 0;
@@ -1088,6 +1094,7 @@ static uint8_t msg_tx_payload( struct message *msg, uint8_t *done ) {
 
   if( msg->count < msg->len ) {
     byte = msg->payload[ msg->count ];
+	ESP_LOGI(TAG, "TX payload[%d]=%02x",msg->count,byte);
     msg->count++;
   } else {
     msg->count = 0;
@@ -1103,6 +1110,7 @@ static uint8_t msg_tx_checksum( struct message *msg, uint8_t *done ) {
 
   if( msg->count < 1 ) {
     byte = msg->csum;
+	ESP_LOGI(TAG, "TX csum=%02x",byte);
     msg->count++;
   } else {
     msg->count = 0;
