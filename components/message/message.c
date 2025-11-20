@@ -334,12 +334,12 @@ static uint8_t msg_print_rssi( char *str, uint8_t rssi, uint16_t valid ) {
   return n;
 }
 
-static uint8_t msg_print_type( char *str, uint8_t type ) {
+static uint8_t msg_print_type( char *str, uint16_t type ) {
   uint8_t n = 0;
 
-  uint8_t rf3 = ( type & F_RAMSES3 );
+  uint16_t rf3 = ( type & F_RAMSES3 );
 
-  n = sprintf_P( str,PSTR("%2s"),MsgType[ type & ~F_RAMSES3] );
+  n = sprintf_P( str,PSTR("%2s"),MsgType[ type & F_MASK ] );
   if( rf3 ) str[n++] = '*';
   str[n++] = ' ';
 
@@ -798,14 +798,14 @@ static uint8_t msg_scan_header( struct message *msg, char *str, uint8_t nChar ) 
 
   // Identify RAMSES-3 message
   uint16_t rf3 = 0;
-  if( str[ nChar-2 ]=='*' ) {
+  if( str[ nChar-1 ]=='*' ) {
     rf3 = F_RAMSES3;
-    str[ nChar-1 ] = '\0';
+    str[ --nChar ] = '\0';
   }
 
   // Cheap conversion to upper for acceptable characters
-  while( --nChar ) {
-    str[ nChar-1 ] &= ~( 'A'^'a' );
+  while( nChar ) {
+    str[ --nChar ] &= ~( 'A'^'a' );
   }
 
   for( msgType=F_RQ ; msgType<=F_RP ; msgType++ ) {
