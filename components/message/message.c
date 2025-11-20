@@ -74,11 +74,9 @@ struct message {
   uint8_t state;
   uint8_t count;
 
-  uint8_t protocol;	 // RAMSES protocol version
-
   uint16_t fields;   // Fields specified in header
-  uint8_t rxFields;  // Fields actually received
-  uint8_t error;
+  uint16_t rxFields; // Fields actually received
+  uint8_t  error;
 
   uint8_t addr[3][3];
   uint8_t param[2];
@@ -468,7 +466,7 @@ static uint8_t msg_print_field( struct message *msg, char *buff ) {
     /* fallthrough */
 
   case S_HEADER:
-    nBytes = msg_print_type( buff, msg->fields & ( F_MASK || F_RAMSES3 ) );
+    nBytes = msg_print_type( buff, msg->fields & ( F_MASK|F_RAMSES3 ) );
     msg->state = S_PARAM0;
     if( nBytes )
       break;
