@@ -283,11 +283,9 @@ static uint8_t msg_checksum( struct message *msg ) {
   uint8_t csum;
   uint8_t i,j;
 
-  // HACK for checksum attached to payload
+  // HACK for checksum attached to payload (already scanned)
   if( msg->fields & F_RAMSES3 ) {
-	csum = msg->payload[msg->nPayload-1];
-	ESP_LOGI(TAG, "TX CSUM=%02x (%d)",csum,msg->nPayload);
-    return csum;
+    return msg->csum;
   }
 
   // Missing fields will be zero so we can just add them to checksum without testing presence
@@ -296,7 +294,7 @@ static uint8_t msg_checksum( struct message *msg ) {
   for( i=0 ; i<2 ; i++ )                          { csum += msg->param[i];           }
   for( i=0 ; i<2 ; i++ )                          { csum += msg->opcode[i];          }
                                                   { csum += msg->len;                }
-  for( i=0 ; i<msg->nPayload ; i++ )              { csum += msg->payload[i];         }
+  for( i=0 ; i<msg->len ; i++ )                   { csum += msg->payload[i];         }
 
   return -csum;
 }
@@ -799,14 +797,14 @@ static uint8_t msg_scan_header( struct message *msg, char *str, uint8_t nChar ) 
 
   // Identify RAMSES-3 message
   uint16_t rf3 = 0;
-  if( str[ nChar-1 ]=='*' ) {
+  if( str[ nChar-2 ]=='*' ) {
     rf3 = F_RAMSES3;
-    str[ --nChar ] = '\0';
+    str[ (--nChar)-1 ] = '\0';
   }
 
   // Cheap conversion to upper for acceptable characters
-  while( nChar ) {
-    str[ --nChar ] &= ~( 'A'^'a' );
+  while( --nChar ) {
+    str[ nChar-1 ] &= ~( 'A'^'a' );
   }
 
   for( msgType=F_RQ ; msgType<=F_RP ; msgType++ ) {
@@ -924,12 +922,12 @@ uint8_t msg_scan( struct message *msg, uint8_t byte ) {
 	  msg->error = MSG_BAD_TX;
       return 1;
     } else {
-      byte = '\0';
+       byte = '\0';
     }
   }
 
   if( msg->nBytes<MAX_RAW )
-    msg->raw[msg->nBytes++] = byte;
+	msg->raw[msg->nBytes++] = byte;
 
   // Discard to end of line
   if( msg->state == S_ERROR )
@@ -957,7 +955,20 @@ uint8_t msg_scan( struct message *msg, uint8_t byte ) {
           msg->state = S_CHECKSUM;
         }
       }
+    } else { // wait for second byte
+      return 0;
+    }
+  }
 
+  // HACK: for RAMSES_III checksum at end of payload
+  if( byte && ( msg->state == S_CHECKSUM ) && (msg->fields&F_RAMSES3) ) {
+    if( nChar==2 ) {
+      field[nChar++] = '\0';
+
+      sscanf( field, "%02hhx", &msg->csum );
+      // Tack the csum back on the end of the payload so it looks same as RX
+      msg->payload[msg->nPayload++] = msg->csum;
+      nChar = 0;
     } else { // wait for second byte
       return 0;
     }
