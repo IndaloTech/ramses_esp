@@ -59,6 +59,7 @@ static const char *TAG = "WIFI";
   WIFI_STATE( WIFI_FAILED,        "Failed" ) \
   WIFI_STATE( WIFI_CONNECTED,     "Connected" ) \
   WIFI_STATE( WIFI_DISCONNECTED,  "Disconnected" ) \
+  WIFI_STATE( WIFI_RESTART,       "Restart" ) \
 
 
 #define WIFI_STATE( _e, _t ) _e,
@@ -226,14 +227,7 @@ static void wifi_event_handler( void* arg, esp_event_base_t event_base, int32_t 
   if( event_base==WIFI_EVENT && event_id==WIFI_EVENT_STA_START ) {
      esp_wifi_connect();
   } else if( event_base==WIFI_EVENT && event_id==WIFI_EVENT_STA_DISCONNECTED ) {
-    if( ctxt->retry_num < CONFIG_WIFI_MAXIMUM_RETRY ) {
-      esp_wifi_connect();
-      ctxt->retry_num++;
-      ESP_LOGI(TAG, "retry to connect to the AP");
-    } else {
-      xEventGroupSetBits( ctxt->event_group, WIFI_FAIL_BIT );
-    }
-    ESP_LOGI(TAG,"connect to the AP fail");
+    xEventGroupSetBits( ctxt->event_group, WIFI_FAIL_BIT );
   } else if( event_base==IP_EVENT && event_id==IP_EVENT_STA_GOT_IP ) {
     ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
     ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
@@ -307,30 +301,41 @@ static void wifi_state_machine( struct wifi_data *ctxt ) {
       ctxt->state = WIFI_CONNECTED;
       xEventGroupClearBits( ctxt->event_group, WIFI_CONNECTED_BIT );
     } else if( bits & WIFI_FAIL_BIT ) {
-      ESP_LOGI( TAG, "Failed to connect to SSID:%s",(char *)ctxt->station_config.sta.ssid );
-      printf("# Failed to connect to SSID:%s\n", (char *)ctxt->station_config.sta.ssid );
-      ctxt->state = WIFI_FAILED;
+      if( ctxt->retry_num < CONFIG_WIFI_MAXIMUM_RETRY ) {
+        esp_wifi_connect();
+        ctxt->retry_num++;
+        ESP_LOGI( TAG, "retry to connect to the AP" );
+      } else {
+        ESP_LOGI( TAG, "Failed to connect to SSID:%s",(char *)ctxt->station_config.sta.ssid );
+        printf("# Failed to connect to SSID:%s\n", (char *)ctxt->station_config.sta.ssid );
+        ctxt->state = WIFI_FAILED;
+      }
       xEventGroupClearBits( ctxt->event_group, WIFI_FAIL_BIT );
     }
     break;
 
   case WIFI_FAILED:
-	if( ctxt->restart ) {
-      esp_wifi_stop();
-	  ctxt->restart = false;
-	  ctxt->state = WIFI_CREATED;
-	}
+    ctxt->state = WIFI_RESTART;
     break;
 
   case WIFI_CONNECTED:
-    if( ctxt->restart ) {
-      esp_wifi_stop();
-      ctxt->restart = false;
-      ctxt->state = WIFI_CREATED;
+    if( bits & WIFI_FAIL_BIT ) {
+      ctxt->state = WIFI_DISCONNECTED;
+    } else if( ctxt->restart ) {
+      ctxt->state = WIFI_RESTART;
     }
     break;
 
   case WIFI_DISCONNECTED:
+    ESP_LOGI( TAG ,"disconnected from SSID:%s", (char *)ctxt->station_config.sta.ssid );
+    printf("# Disconnected from SSID:%s\n", (char *)ctxt->station_config.sta.ssid );
+    ctxt->state = WIFI_RESTART;
+    break;
+
+  case WIFI_RESTART:
+    esp_wifi_stop();
+    ctxt->restart = false;
+    ctxt->state = WIFI_CREATED;
     break;
 
   default:
