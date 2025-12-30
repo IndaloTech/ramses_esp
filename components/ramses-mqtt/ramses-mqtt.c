@@ -219,6 +219,12 @@ static void mqtt_subscribe_tx( struct mqtt_data *ctxt ) {
   esp_mqtt_client_subscribe( ctxt->client, topic, 0);
 }
 
+static void mqtt_unsubscribe_tx( struct mqtt_data *ctxt ) {
+  char topic[64];
+  sprintf( topic, "%s/tx", ctxt->topic );
+  esp_mqtt_client_unsubscribe( ctxt->client, topic );
+}
+
 static void mqtt_process_tx( struct mqtt_data *ctxt, char const *data, int dataLen ) {
   cJSON *json, *msg;
 
@@ -248,6 +254,12 @@ static void mqtt_subscribe_cmd( struct mqtt_data *ctxt ) {
   char topic[64];
   sprintf( topic, "%s/cmd/cmd", ctxt->topic );
   esp_mqtt_client_subscribe( ctxt->client, topic, 2 );
+}
+
+static void mqtt_unsubscribe_cmd( struct mqtt_data *ctxt ) {
+  char topic[64];
+  sprintf( topic, "%s/cmd/cmd", ctxt->topic );
+  esp_mqtt_client_unsubscribe( ctxt->client, topic );
 }
 
 static void mqtt_publish_cmd_result( struct mqtt_data *ctxt, char const *cmd, esp_err_t err, int retVal ) {
@@ -326,7 +338,7 @@ static void mqtt_event_handler( void *handler_args, esp_event_base_t base, int32
 
   case MQTT_EVENT_DISCONNECTED:
     ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
-    printf("# MQTT: Disonnected\n");
+    printf("# MQTT: Disconnected\n");
     mqtt_set_state( ctxt, MQTT_DISCONNECTED );
     break;
 
@@ -408,6 +420,8 @@ static void mqtt_state_machine( struct mqtt_data *ctxt ) {
     break;
 
   case MQTT_DISCONNECTED:
+    mqtt_unsubscribe_tx( ctxt );
+    mqtt_unsubscribe_cmd( ctxt );
     esp_mqtt_client_unregister_event( ctxt->client, ESP_EVENT_ANY_ID, mqtt_event_handler );
     esp_mqtt_client_stop( ctxt->client );
     mqtt_set_state( ctxt,MQTT_WAIT );
