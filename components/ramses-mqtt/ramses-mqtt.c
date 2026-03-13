@@ -259,12 +259,30 @@ static void mqtt_publish_cmd_result( struct mqtt_data *ctxt, char const *cmd, es
 //  mqtt_publish_cmd( ctxt ); // Clear CMD so we don't execute ita again
 }
 
+static void mqtt_publish_cmd_result_str( struct mqtt_data *ctxt, char const *cmd, esp_err_t err, char const *retVal ) {
+  char topic[192],data[128];
+
+  sprintf( topic, "%s/cmd/result",ctxt->topic );
+  sprintf( data, "{ \"cmd\":\"%s\", \"err\":\"%s\", \"return\":\"%s\"} ",cmd, esp_err_to_name(err),retVal ? retVal : "" );
+  esp_mqtt_client_publish( ctxt->client,topic, data, 0, 0, 0 );
+}
+
 static void mqtt_process_cmd( struct mqtt_data *ctxt, char const *data, int dataLen ) {
   if( dataLen>0 ) {
     char cmdline[128];
     sprintf( cmdline,"%.*s", dataLen,data );	// Make sure cmdline contains trailing '\0'
 
-    int retVal;
+    // MQTT clients use !V as a gateway handshake and expect an evofw3-style string.
+    if( !strcmp( cmdline, "!V" ) ) {
+      const esp_app_desc_t *app = esp_app_get_description();
+      char version[32];
+
+      sprintf( version, "# evofw3 %s", app->version );
+      mqtt_publish_cmd_result_str( ctxt, cmdline, ESP_OK, version );
+      return;
+    }
+
+    int retVal = 0;
     esp_err_t err = cmd_run( cmdline, &retVal );
 
     mqtt_publish_cmd_result( ctxt, cmdline, err, retVal );
