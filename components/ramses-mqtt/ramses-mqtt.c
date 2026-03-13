@@ -264,7 +264,7 @@ static void mqtt_process_cmd( struct mqtt_data *ctxt, char const *data, int data
     char cmdline[128];
     sprintf( cmdline,"%.*s", dataLen,data );	// Make sure cmdline contains trailing '\0'
 
-    int retVal;
+    int retVal = 0;
     esp_err_t err = cmd_run( cmdline, &retVal );
 
     mqtt_publish_cmd_result( ctxt, cmdline, err, retVal );
