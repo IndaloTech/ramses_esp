@@ -409,7 +409,14 @@ static void tx_fifo_fill(void) {
 
     // Switch to rising edge to detect FIFO empty
     gpio_set_intr_type( CONFIG_CC_GDO0_GPIO, GPIO_INTR_POSEDGE );
+    return;
    }
+
+  if( !gpio_get_level( CONFIG_CC_GDO0_GPIO ) ) {
+    xQueueSend( tx_isr_queue, NULL, 0 );
+    ESP_LOGW( TAG, "TX refill queued follow-up event" );
+    printf("# FRAME: TX refill queued follow-up event\n");
+  }
 }
 
 //---------------------------------------------------------------------------------
@@ -430,13 +437,22 @@ static void tx_fifo_init(void) {
 }
 
 static void tx_fifo_start(void) {
+  xQueueReset( tx_isr_queue );
+
+  gpio_intr_disable( CONFIG_CC_GDO0_GPIO );
   // Falling edge for FIFO low
   gpio_set_intr_type( CONFIG_CC_GDO0_GPIO, GPIO_INTR_NEGEDGE );
+  gpio_isr_handler_add( CONFIG_CC_GDO0_GPIO, GDO0_ISR,  NULL );
+  gpio_intr_enable( CONFIG_CC_GDO0_GPIO );
 
   tx_fifo_prime();
   tx_state = TX_FIFO_FILL;
 
-  gpio_isr_handler_add( CONFIG_CC_GDO0_GPIO, GDO0_ISR,  NULL );
+  int gdo0 = gpio_get_level( CONFIG_CC_GDO0_GPIO );
+  if( !gdo0 ) {
+    xQueueSend( tx_isr_queue, NULL, 0 );
+    printf("# FRAME: tx start: synthetic refill event queued\n");
+  }
 }
 
 static void tx_fifo_work(void) {
