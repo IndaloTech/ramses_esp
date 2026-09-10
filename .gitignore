@@ -8,3 +8,4 @@ managed_components
 *.lock
 
 sdkconfig
+/.metadata/
