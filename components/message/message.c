@@ -58,11 +58,8 @@ enum message_state {
 
 #define F_PARAM0  0x04
 #define F_PARAM1  0x08
-
-#define F_RSSI    0x80
-
-#define F_ENCRYPT 0x800
-#define F_ENCOPT  0x400
+#define F_RAMSES3 0x80
+#define F_RSSI   0x800
 
 // Only used for received fields
 #define F_OPCODE 0x01
@@ -238,14 +235,13 @@ static const uint8_t address_flags[4] = {
   F_ADDR0+F_ADDR1
 };
 
-#define HDR_T_MASK  0x30
-#define HDR_T_SHIFT    4
-#define HDR_A_MASK  0x0C
-#define HDR_A_SHIFT    2
-#define HDR_PARAM0  0x02
-#define HDR_PARAM1  0x01
-#define HDR_ENCRYPT 0x80
-#define HDR_ENCOPT  0x40
+#define HDR_T_MASK 0x30
+#define HDR_T_SHIFT   4
+#define HDR_A_MASK 0x0C
+#define HDR_A_SHIFT   2
+#define HDR_PARAM0 0x02
+#define HDR_PARAM1 0x01
+#define HDR_RF3    0x80
 
 static uint16_t get_hdr_flags(uint8_t header ) {
   uint16_t flags;
@@ -254,10 +250,9 @@ static uint16_t get_hdr_flags(uint8_t header ) {
   flags |= address_flags[ ( header & HDR_A_MASK ) >> HDR_A_SHIFT ];
   if( header & HDR_PARAM0 ) flags |= F_PARAM0;
   if( header & HDR_PARAM1 ) flags |= F_PARAM1;
-  if( header & HDR_ENCRYPT) flags |= F_ENCRYPT;
-  if( header & HDR_ENCOPT ) flags |= F_ENCOPT;
+  if( header & HDR_RF3    ) flags |= F_RAMSES3;
 
-  return flags;
+   return flags;
 }
 
 static uint8_t get_header( uint16_t flags ) __attribute__((unused));
@@ -273,8 +268,7 @@ static uint8_t get_header( uint16_t flags ) {
       header |= ( flags & F_MASK ) << HDR_T_SHIFT;  // Message type
       if( flags & F_PARAM0  ) header |= HDR_PARAM0;
       if( flags & F_PARAM1  ) header |= HDR_PARAM1;
-      if( flags & F_ENCRYPT ) header |= HDR_ENCRYPT;
-      if( flags & F_ENCOPT  ) header |= HDR_ENCOPT;
+      if( flags & F_RAMSES3 ) header |= HDR_RF3;
       break;
     }
   }
@@ -289,6 +283,11 @@ static uint8_t msg_checksum( struct message *msg ) {
   uint8_t csum;
   uint8_t i,j;
 
+  // HACK for checksum attached to payload (already scanned)
+  if( msg->fields & F_RAMSES3 ) {
+    return msg->csum;
+  }
+
   // Missing fields will be zero so we can just add them to checksum without testing presence
                                                   { csum  = get_header(msg->fields); }
   for( i=0 ; i<3 ; i++ ) { for( j=0 ; j<3 ; j++ ) { csum += msg->addr[i][j]; }       }
@@ -297,10 +296,7 @@ static uint8_t msg_checksum( struct message *msg ) {
                                                   { csum += msg->len;                }
   for( i=0 ; i<msg->len ; i++ )                   { csum += msg->payload[i];         }
 
-  csum = -csum; 	// Normal wire value
-  if( msg->fields & F_ENCRYPT ) csum += 1 ;
-
-  return csum;
+  return -csum;
 }
 
 static void msg_set_address( uint8_t *addr, uint8_t class, uint32_t id ) {
@@ -340,10 +336,10 @@ static uint8_t msg_print_rssi( char *str, uint8_t rssi, uint16_t valid ) {
 static uint8_t msg_print_type( char *str, uint16_t type ) {
   uint8_t n = 0;
 
-  uint16_t encrypt = ( type & F_ENCRYPT );
+  uint16_t rf3 = ( type & F_RAMSES3 );
 
   n = sprintf_P( str,PSTR("%2s"),MsgType[ type & F_MASK ] );
-  if( encrypt ) str[n++] = '*';
+  if( rf3 ) str[n++] = '*';
   str[n++] = ' ';
 
   str[n] = '\0';
@@ -469,7 +465,7 @@ static uint8_t msg_print_field( struct message *msg, char *buff ) {
     /* fallthrough */
 
   case S_HEADER:
-    nBytes = msg_print_type( buff, msg->fields & ( F_MASK|F_ENCRYPT ) );
+    nBytes = msg_print_type( buff, msg->fields & ( F_MASK|F_RAMSES3 ) );
     msg->state = S_PARAM0;
     if( nBytes )
       break;
@@ -678,19 +674,18 @@ static uint8_t msg_rx_payload( struct message *msg, uint8_t byte ) {
   }
 
   msg->count++;
+#if 0
   if( msg->count==msg->len ) {
     msg->count = 0;
     state = S_CHECKSUM;
   }
+#endif
 
   return state;
 }
 
 static uint8_t msg_rx_checksum( struct message *msg, uint8_t byte __attribute__((unused))) {
   uint8_t state = S_COMPLETE;
-
-  if( msg->fields & F_ENCRYPT )
-	msg->csum -= 1;
 
   if( msg->csum != 0 && !msg->error )
     msg->error = MSG_CSUM_ERR;
@@ -760,12 +755,28 @@ void msg_rx_end( uint8_t nBytes, uint8_t error ) {
   msgRx->nBytes = nBytes;
 
   if( error==MSG_OK ) {
+	if( !(msgRx->fields & F_RAMSES3 ) ) {
+	 // RAMSES_2
+     if( msgRx->csum != 0 ) {
+       error = MSG_CSUM_ERR;
+     } else {
+       msgRx->nPayload--;  // Remove checksum from payload count
+     }
+	} else {
+	  // RAMSES-3 leave checksum at end of payload
+      ESP_LOGW(TAG, "RF-3 message - Checksum not verified");
+    }
+
     // All optional fields received as expected?
     if(   ( ( msgRx->rxFields & F_OPTION ) != ( msgRx->fields & F_OPTION ) )
-       || ( ( msgRx->rxFields & F_MAND   ) != ( F_MAND                   ) )
-       || ( ( msgRx->len                 ) != ( msgRx->nPayload          ) ) ) {
-       error = MSG_TRUNC_ERR;
-     }
+       || ( ( msgRx->rxFields & F_MAND   ) != F_MAND  ) )
+     error = MSG_TRUNC_ERR;
+
+	if( !(msgRx->fields & F_RAMSES3 ) ) {
+      /* RAMSES_2: */ if( msgRx->len != msgRx->nPayload   ) error = MSG_TRUNC_ERR;
+	} else {
+      /* RAMSES_3: */ if( msgRx->len != msgRx->nPayload-1 ) error = MSG_TRUNC_ERR;
+    }
   }
 
   ESP_LOGI( TAG, "END[%d] (%s)",nBytes,msg_error_str(error) );
@@ -785,9 +796,9 @@ static uint8_t msg_scan_header( struct message *msg, char *str, uint8_t nChar ) 
   uint16_t msgType;
 
   // Identify RAMSES-3 message
-  uint16_t encrypt = 0;
+  uint16_t rf3 = 0;
   if( str[ nChar-2 ]=='*' ) {
-    encrypt = F_ENCRYPT;
+    rf3 = F_RAMSES3;
     str[ (--nChar)-1 ] = '\0';
   }
 
@@ -798,7 +809,7 @@ static uint8_t msg_scan_header( struct message *msg, char *str, uint8_t nChar ) 
 
   for( msgType=F_RQ ; msgType<=F_RP ; msgType++ ) {
     if( 0==strcmp( str, MsgType[msgType] ) ) {
-      msg->fields = msgType | encrypt ;
+      msg->fields = msgType | rf3 ;
 	  ok = 1;
       break;
     }
@@ -944,6 +955,20 @@ uint8_t msg_scan( struct message *msg, uint8_t byte ) {
           msg->state = S_CHECKSUM;
         }
       }
+    } else { // wait for second byte
+      return 0;
+    }
+  }
+
+  // HACK: for RAMSES_III checksum at end of payload
+  if( byte && ( msg->state == S_CHECKSUM ) && (msg->fields&F_RAMSES3) ) {
+    if( nChar==2 ) {
+      field[nChar++] = '\0';
+
+      sscanf( field, "%02hhx", &msg->csum );
+      // Tack the csum back on the end of the payload so it looks same as RX
+      msg->payload[msg->nPayload++] = msg->csum;
+      nChar = 0;
     } else { // wait for second byte
       return 0;
     }
