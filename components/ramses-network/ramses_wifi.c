@@ -250,7 +250,7 @@ static void wifi_check_station( struct wifi_data *ctxt ) {
   cfg.wifi_task_core_id = ctxt->coreID;
   ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
 
-  ESP_ERROR_CHECK( esp_wifi_get_config(ESP_IF_WIFI_STA, &config ) );
+  ESP_ERROR_CHECK( esp_wifi_get_config(WIFI_IF_STA, &config ) );
   if( config.sta.ssid[0]!='\0' ) {
 	memcpy( param.ssid, config.sta.ssid, sizeof(param.ssid) );
 	_wifi_set_ssid( ctxt, &param );
