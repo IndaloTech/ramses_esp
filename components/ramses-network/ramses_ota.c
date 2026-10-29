@@ -65,7 +65,13 @@ esp_err_t _http_event_handler( esp_http_client_event_t *evt ) {
   case HTTP_EVENT_HEADER_SENT:
     ESP_LOGD(TAG, "HTTP_EVENT_HEADER_SENT");
     break;
+  case HTTP_EVENT_ON_STATUS_CODE:
+    ESP_LOGD(TAG, "HTTP_EVENT_ON_STATUS_CODE");
+    break;
   case HTTP_EVENT_ON_HEADER:
+    ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
+    break;
+  case HTTP_EVENT_ON_HEADERS_COMPLETE:
     ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
     break;
   case HTTP_EVENT_ON_DATA:
