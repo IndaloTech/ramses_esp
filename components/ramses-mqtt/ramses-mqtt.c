@@ -36,6 +36,7 @@ static const char *TAG = "MQTT";
   MQTT_STATE( MQTT_STARTING,      "Starting" ) \
   MQTT_STATE( MQTT_CONNECTED,     "Connected" ) \
   MQTT_STATE( MQTT_ACTIVE,        "Active" ) \
+  MQTT_STATE( MQTT_DISCONNECTED,  "Disconnected" ) \
 
 #define MQTT_STATE( _e, _t ) _e,
 enum mqtt_state {
@@ -218,6 +219,12 @@ static void mqtt_subscribe_tx( struct mqtt_data *ctxt ) {
   esp_mqtt_client_subscribe( ctxt->client, topic, 0);
 }
 
+static void mqtt_unsubscribe_tx( struct mqtt_data *ctxt ) {
+  char topic[64];
+  sprintf( topic, "%s/tx", ctxt->topic );
+  esp_mqtt_client_unsubscribe( ctxt->client, topic );
+}
+
 static void mqtt_process_tx( struct mqtt_data *ctxt, char const *data, int dataLen ) {
   cJSON *json, *msg;
 
@@ -247,6 +254,12 @@ static void mqtt_subscribe_cmd( struct mqtt_data *ctxt ) {
   char topic[64];
   sprintf( topic, "%s/cmd/cmd", ctxt->topic );
   esp_mqtt_client_subscribe( ctxt->client, topic, 2 );
+}
+
+static void mqtt_unsubscribe_cmd( struct mqtt_data *ctxt ) {
+  char topic[64];
+  sprintf( topic, "%s/cmd/cmd", ctxt->topic );
+  esp_mqtt_client_unsubscribe( ctxt->client, topic );
 }
 
 static void mqtt_publish_cmd_result( struct mqtt_data *ctxt, char const *cmd, esp_err_t err, int retVal ) {
@@ -325,8 +338,8 @@ static void mqtt_event_handler( void *handler_args, esp_event_base_t base, int32
 
   case MQTT_EVENT_DISCONNECTED:
     ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
-    printf("# MQTT: Disonnected\n");
-    esp_restart();
+    printf("# MQTT: Disconnected\n");
+    mqtt_set_state( ctxt, MQTT_DISCONNECTED );
     break;
 
   case MQTT_EVENT_SUBSCRIBED:
@@ -379,6 +392,7 @@ static void mqtt_state_machine( struct mqtt_data *ctxt ) {
 	char const *dev = device();
 	if( dev[0] ) {
       sprintf( ctxt->topic,"%s/%s",ctxt->root,dev );
+      ctxt->info = 0;
       ctxt->client = esp_mqtt_client_init( &ctxt->cfg );
       ESP_LOGI( TAG, "Connecting to %s",ctxt->cfg.broker.address.uri );
       printf("# MQTT: Connecting to %s\n",ctxt->cfg.broker.address.uri );
@@ -403,6 +417,14 @@ static void mqtt_state_machine( struct mqtt_data *ctxt ) {
   case MQTT_ACTIVE:
     if( ctxt->info<INFO_MAX )
       mqtt_publish_info( ctxt );
+    break;
+
+  case MQTT_DISCONNECTED:
+    mqtt_unsubscribe_tx( ctxt );
+    mqtt_unsubscribe_cmd( ctxt );
+    esp_mqtt_client_unregister_event( ctxt->client, ESP_EVENT_ANY_ID, mqtt_event_handler );
+    esp_mqtt_client_stop( ctxt->client );
+    mqtt_set_state( ctxt,MQTT_WAIT );
     break;
 
   default:
