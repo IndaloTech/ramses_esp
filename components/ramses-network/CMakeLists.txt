@@ -7,5 +7,6 @@ set( component_srcs
 idf_component_register(
     SRCS "${component_srcs}"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES command nvs_flash esp_wifi esp_netif console mbedtls app_update esp_partition esp_https_ota esp_http_client
+    PRIV_REQUIRES nvs_flash esp_wifi esp_netif console mbedtls app_update esp_partition esp_https_ota esp_http_client
+    PRIV_REQUIRES command ramses-mqtt
 )
