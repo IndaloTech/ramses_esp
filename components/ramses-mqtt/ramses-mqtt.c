@@ -76,19 +76,19 @@ struct mqtt_data {
 static struct mqtt_data *mqtt_ctxt( void ) {
   static struct mqtt_data mqtt = {
     .state = MQTT_IDLE,
-	.root = CONFIG_MQTT_ROOT,
+	  .root = CONFIG_MQTT_ROOT,
     .cfg = {
-      .session = {
+    .session = {
     	.last_will = {
           .msg = "offline",
           .topic = mqtt.topic,
           .qos = 1,
           .retain = 1,
     	},
-		.keepalive=20,
+		  .keepalive=20,
       },
     },
-	.info = 0,
+	  .info = 0,
   };
 
   static struct mqtt_data *ctxt = NULL;
@@ -173,7 +173,7 @@ static void publish_version( struct mqtt_data *ctxt, char *topic ) {
 static void mqtt_publish_info( struct mqtt_data *ctxt ) {
   static info_field const publish[INFO_MAX] = {
     [INFO_FW]  = publish_firmware,
-	[INFO_VER] = publish_version,
+	  [INFO_VER] = publish_version,
   };
   if( ctxt->info < INFO_MAX ) {
     char topic[64];
