@@ -1,10 +1,6 @@
 ## IDF Component Manager Manifest File
-dependencies:   
-# Want access to CONFIG_LOG_MASTER_LEVEL which appears in Release 5.2
-# Unfortunately stable releases avaialble at this time (5.2.1) have a problem with OTA from github
-# See <https://github.com/espressif/esp-idf/issues/13497>
-# This requires reversal of a commit after installing v5.2.1
-# in the framework directory
-# git revert 04ac8e43dbaf37e42452fef034606ae3f04e644b  
-  idf: 
-    version: "==5.2.1"
+dependencies:
+  idf:
+    version: '>=6'
+  espressif/mqtt: '*'
+  espressif/cjson: "^1.7.19"
