@@ -201,6 +201,7 @@ static void mqtt_publish_rx( struct mqtt_data *ctxt, char const *ts, char const 
   esp_mqtt_client_publish( ctxt->client,topic, rx, 0, 1, 0 );
 
   cJSON_Delete( json );
+  free(rx);
 }
 
 void MQTT_publish_rx( char const *ts, char const *msg ) {
