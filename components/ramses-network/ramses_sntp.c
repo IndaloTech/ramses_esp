@@ -64,12 +64,18 @@ struct sntp_data {
 
   enum sntp_state state;
 
+  bool serverReset;
+  bool serverValid;
   char server[32];
 };
 
+#define NULL_SERVER "0.0.0.0"
+
 static struct sntp_data *sntp_ctxt(void) {
-  static struct sntp_data data ={
-    .server = "0.0.0.0"
+  static struct sntp_data data = {
+    .serverReset = false,
+    .serverValid = false,
+    .server = NULL_SERVER
   };
 
   static struct sntp_data *ctxt = NULL;
@@ -80,8 +86,6 @@ static struct sntp_data *sntp_ctxt(void) {
 
   return ctxt;
 }
-
-
 
 
 /************************************************************
@@ -109,10 +113,12 @@ static void time_sync_notification_cb(struct timeval *tv)
 
 /**************************************************************/
 
-static void Sntp_init( char *server ) {
-  ESP_LOGI(TAG, "Initializing");
+static int Sntp_init( struct sntp_data *ctxt ) {
+  int err;
 
-  esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG( server );
+  ESP_LOGI(TAG, "Initializing" );
+
+  esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG( ctxt->server );
 
   config.start = false;
   config.sync_cb = time_sync_notification_cb; // only if we need the notification function
@@ -124,13 +130,17 @@ static void Sntp_init( char *server ) {
   config.ip_event_to_renew = IP_EVENT_STA_GOT_IP;
 #endif /* LWIP_DHCP_GET_NTP_SRV */
 
-  esp_netif_sntp_init(&config);
+  err = esp_netif_sntp_init(&config);
+  if( err )
+    ESP_LOGE( TAG,"failed to initialise SNTP (err=%d)",err );
+
+  return err;
 }
 
 /**************************************************************/
 
-static esp_err_t Sntp_start(void) {
-  ESP_LOGI(TAG, "Starting");
+static esp_err_t Sntp_start( struct sntp_data *ctxt ) {
+  ESP_LOGI(TAG, "Starting <%s>",ctxt->server );
 
   esp_err_t err = esp_netif_sntp_start();
   if( err!=ESP_OK )
@@ -141,29 +151,57 @@ static esp_err_t Sntp_start(void) {
 
 /**************************************************************/
 
+static void Sntp_stop( struct sntp_data *ctxt ) {
+  ESP_LOGI(TAG, "Stopping <%s>",ctxt->server );
+
+  esp_netif_sntp_deinit();
+}
+
+/**************************************************************/
+
 static bool sntp_state_machine( struct sntp_data *ctxt ) {
   bool terminate = false;
   esp_err_t err;
 
   switch( ctxt->state ) {
-  case SNTP_IDLE:
-	Sntp_init( ctxt->server );
-    sntp_set_state( ctxt, SNTP_WAIT );
-	break;
+    case SNTP_IDLE:
+      if( ctxt->serverValid ) {
+        err = Sntp_init( ctxt );
+        if( err==ESP_OK ) {
+          ctxt->serverReset = false;
+          sntp_set_state( ctxt, SNTP_WAIT );
+        } else {
+          terminate = true;
+        }
+      }
+    break;
 
   case SNTP_WAIT:
-	if( wifi_is_connected() )
-	  sntp_set_state( ctxt,SNTP_START );
-	break;
+    if( wifi_is_connected() )
+      sntp_set_state( ctxt, SNTP_START );
+    break;
 
   case SNTP_START:
-	err = Sntp_start();
-	if( err==ESP_OK )
-      sntp_set_state( ctxt, SNTP_STARTING );
-	break;
+    if( ctxt->serverReset ) {
+      Sntp_stop( ctxt );
+      sntp_set_state( ctxt, SNTP_IDLE );
+    } else {
+      err = Sntp_start( ctxt );
+      if( err==ESP_OK )
+        sntp_set_state( ctxt, SNTP_STARTING );
+      else {
+        ctxt->serverValid = false;
+        sntp_set_state( ctxt, SNTP_IDLE );
+      }
+    }
+    break;
 
   case SNTP_STARTING:
-	break;
+    if( ctxt->serverReset ) {
+      Sntp_stop( ctxt );
+      sntp_set_state( ctxt, SNTP_IDLE );
+    }
+    break;
 
   case SNTP_ACTIVE:
     {
@@ -181,7 +219,7 @@ static bool sntp_state_machine( struct sntp_data *ctxt ) {
 	break;
 
   default:
-	terminate = true;
+	  terminate = true;
   }
 
   return terminate;
@@ -198,14 +236,47 @@ static void Sntp( void *param ) {
   ESP_LOGI( TAG, "Task Exiting");
 }
 
+/**************************************************************/
+
+static bool sntp_set_server( struct sntp_data *ctxt, char *server ) {
+  bool result = true;
+  if( ctxt ) {
+    if( server && server[0]!='\0' ) {
+      if( strlen( server ) >= sizeof( ctxt->server) ) {
+        ESP_LOGW( TAG, "SNTP server url too long <%s>", server );
+        result = false;
+      } else {
+        ctxt->serverValid = false;
+        ctxt->serverReset = true;
+        strncpy( ctxt->server, NULL_SERVER, sizeof(ctxt->server) );
+
+        if( server[0]!='.' ) {
+          strncpy( ctxt->server, server, sizeof(ctxt->server) );
+          ctxt->serverValid = true;
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/************************************************************
+ * SNTP external api
+ *
+ */
+
+bool ramses_sntp_set_server( char *server ) {
+  struct sntp_data *ctxt = sntp_ctxt();
+  return sntp_set_server( ctxt, server );
+}
+
 void ramses_sntp_init( BaseType_t coreID, char *server ) {
   struct sntp_data *ctxt = sntp_ctxt();
   ctxt->coreID = coreID;
 
-  if( server && server[0]!='\0' )
-	strncpy( ctxt->server, server, sizeof(ctxt->server) );
-
-  sntp_state_machine( ctxt );
+  sntp_set_server( ctxt, server );
 
   xTaskCreatePinnedToCore( Sntp, "SNTP", 4096, ctxt, 10, &ctxt->task, ctxt->coreID );
 }
+

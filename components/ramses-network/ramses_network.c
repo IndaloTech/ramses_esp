@@ -239,9 +239,12 @@ static void net_set_sntp_server( struct network_data *ctxt, char *new_server ) {
 
 void NET_set_sntp_server( char *new_server ) {
   struct network_data *ctxt = network_ctxt();
-  if( ctxt && new_server )
-    net_set_sntp_server( ctxt, new_server );
+  if( ctxt ) {
+    if( ramses_sntp_set_server( new_server) )
+      net_set_sntp_server( ctxt, new_server );
+  }
 }
+
 
 /********************************************************************************
  * Timezones
