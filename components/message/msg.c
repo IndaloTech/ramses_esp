@@ -65,6 +65,8 @@ uint8_t msg_decode_header( uint8_t header ) {
   fields |= address_flags[ ( header & HDR_A_MASK ) >> HDR_A_SHIFT ];
   if( header & HDR_PARAM0 ) fields |= F_PARAM0;
   if( header & HDR_PARAM1 ) fields |= F_PARAM1;
+  if( header & HDR_ENCRYPT) fields |= F_ENCRYPT;
+  if( header & HDR_ENCOPT ) fields |= F_ENCOPT;
 
   return fields;
 }
@@ -79,8 +81,10 @@ uint8_t msg_encode_header( uint8_t fields ) {
     if( addresses==address_flags[i] ) {
       header = i << HDR_A_SHIFT;
       header |= ( fields & F_MASK ) << HDR_T_SHIFT;  // Message type
-      if( fields & F_PARAM0 ) header |= HDR_PARAM0;
-      if( fields & F_PARAM1 ) header |= HDR_PARAM1;
+      if( fields & F_PARAM0  ) header |= HDR_PARAM0;
+      if( fields & F_PARAM1  ) header |= HDR_PARAM1;
+      if( fields & F_ENCRYPT ) header |= HDR_ENCRYPT;
+      if( fields & F_ENCOPT  ) header |= HDR_ENCOPT;
       break;
     }
   }
@@ -224,8 +228,11 @@ uint8_t msg_checksum( struct message *msg ) {
                                                   { csum += msg->len;                }
   for( i=0 ; i<msg->nPayload ; i++ )              { csum += msg->payload[i];         }
 
-  return -csum;
-}
+  csum = -csum;     // Normal wire value
+  if( msg->fields & F_ENCRYPT ) csum += 1 ;
+
+  return csum;
+}  
 
 /************************************************************************************
 **

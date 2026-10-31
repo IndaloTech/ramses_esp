@@ -12,8 +12,8 @@
 
 #include <string.h>
 
-#define MAX_RAW 162
-#define MAX_PAYLOAD 64
+#define MAX_RAW CONFIG_MAX_RAW
+#define MAX_PAYLOAD CONFIG_MAX_PAYLOAD
 #define MAX_ADDR 3
 struct message {
   struct message *next;
@@ -74,15 +74,18 @@ enum message_state {
 #define _MSG_TYPE(_e,_t) _e,
 enum msg_type { _MSG_TYPE_LIST MSG_TYPE_MAX };
 #undef _MSG_TYPE
-#define F_MASK   0x03
+#define F_MASK    0x03
 
-#define F_ADDR0  0x10
-#define F_ADDR1  0x20
-#define F_ADDR2  0x40
+#define F_ADDR0   0x10
+#define F_ADDR1   0x20
+#define F_ADDR2   0x40
 
-#define F_PARAM0 0x04
-#define F_PARAM1 0x08
-#define F_RSSI   0x80
+#define F_PARAM0  0x04
+#define F_PARAM1  0x08
+#define F_RSSI    0x80
+
+#define F_ENCRYPT 0x800
+#define F_ENCOPT  0x400
 
 // Only used for received fields
 #define F_OPCODE 0x01
@@ -91,13 +94,14 @@ enum msg_type { _MSG_TYPE_LIST MSG_TYPE_MAX };
 #define F_OPTION ( F_ADDR0 + F_ADDR1 + F_ADDR2 + F_PARAM0 + F_PARAM1 )
 #define F_MAND   ( F_OPCODE + F_LEN )
 
-#define HDR_T_MASK 0x30
-#define HDR_T_SHIFT   4
-#define HDR_A_MASK 0x0C
-#define HDR_A_SHIFT   2
-#define HDR_PARAM0 0x02
-#define HDR_PARAM1 0x01
-
+#define HDR_T_MASK  0x30
+#define HDR_T_SHIFT    4
+#define HDR_A_MASK  0x0C
+#define HDR_A_SHIFT    2
+#define HDR_PARAM0  0x02
+#define HDR_PARAM1  0x01
+#define HDR_ENCRYPT 0x80
+#define HDR_ENCOPT  0x40
 
 extern char *msg_timestamp( char *timestamp, int len );
 

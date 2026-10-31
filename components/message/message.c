@@ -132,7 +132,7 @@ static struct message *msg_tx_get(void) {  return msg_get( &tx_list ); }
 #define sprintf_P sprintf
 #define PSTR(_s) _s
 
-static uint8_t msg_print_rssi( char *str, uint8_t rssi, uint8_t valid ) {
+static uint8_t msg_print_rssi( char *str, uint8_t rssi, uint16_t valid ) {
   uint8_t n = 0;
 
   if( valid ) {
@@ -144,10 +144,16 @@ static uint8_t msg_print_rssi( char *str, uint8_t rssi, uint8_t valid ) {
   return n;
 }
 
-static uint8_t msg_print_type( char *str, uint8_t type ) {
+static uint8_t msg_print_type( char *str, uint16_t type ) {
   uint8_t n = 0;
 
- n = sprintf_P( str,PSTR("%2s "),MsgType[type] );
+  uint16_t encrypt = ( type & F_ENCRYPT );
+
+  n = sprintf_P( str,PSTR("%2s"),MsgType[ type & F_MASK ] );
+  if( encrypt ) str[n++] = '*';
+  str[n++] = ' ';
+
+  str[n] = '\0';
 
   return n;
 }
@@ -233,6 +239,9 @@ static char const *msg_error_str( uint8_t error )
 static uint8_t msg_print_error( char *str, uint8_t error ) {
   uint8_t n = 0;
 
+  if( error )
+    n = sprintf(str, " * %s", msg_error_str(error) );
+
   return n;
 }
 
@@ -267,7 +276,7 @@ static uint8_t msg_print_field( struct message *msg, char *buff ) {
     /* fallthrough */
 
   case S_HEADER:
-    nBytes = msg_print_type( buff, msg->fields & F_MASK );
+    nBytes = msg_print_type( buff, msg->fields & ( F_MASK|F_ENCRYPT ) );
     msg->state = S_PARAM0;
     if( nBytes )
       break;
@@ -488,6 +497,9 @@ static uint8_t msg_rx_payload( struct message *msg, uint8_t byte ) {
 static uint8_t msg_rx_checksum( struct message *msg, uint8_t byte __attribute__((unused))) {
   uint8_t state = S_COMPLETE;
 
+  if( msg->fields & F_ENCRYPT )
+    msg->csum -= 1;
+
   if( msg->csum != 0 && !msg->error )
     msg->error = MSG_CSUM_ERR;
 
@@ -558,10 +570,10 @@ void msg_rx_end( uint8_t nBytes, uint8_t error ) {
   if( error==MSG_OK ) {
     // All optional fields received as expected?
     if(   ( ( msgRx->rxFields & F_OPTION ) != ( msgRx->fields & F_OPTION ) )
-       || ( ( msgRx->rxFields & F_MAND   ) != F_MAND  )
-       || ( msgRx->len != msgRx->nPayload ) ) {
+       || ( ( msgRx->rxFields & F_MAND   ) != ( F_MAND                   ) )
+       || ( ( msgRx->len                 ) != ( msgRx->nPayload          ) ) ) {
        error = MSG_TRUNC_ERR;
-    }
+     }
   }
 
   ESP_LOGI( TAG, "END[%d] (%s)",nBytes,msg_error_str(error) );
@@ -577,15 +589,23 @@ void msg_rx_end( uint8_t nBytes, uint8_t error ) {
 ********************************************************/
 static uint8_t msg_scan_header( struct message *msg, char *str, uint8_t nChar ) {
   uint8_t ok = 0;
-  uint8_t msgType;
+  uint16_t msgType;
+
+  // Identify RAMSES-3 message
+  uint16_t encrypt = 0;
+  if( str[ nChar-2 ]=='*' ) {
+    encrypt = F_ENCRYPT;
+    str[ (--nChar)-1 ] = '\0';
+  }
 
   // Cheap conversion to upper for acceptable characters
-  while( --nChar )
+  while( --nChar ) {
     str[ nChar-1 ] &= ~( 'A'^'a' );
+  }
 
   for( msgType=F_RQ ; msgType<=F_RP ; msgType++ ) {
     if( 0==strcmp( str, MsgType[msgType] ) ) {
-      msg->fields = msgType;
+      msg->fields = msgType | encrypt ;
 	  ok = 1;
       break;
     }
@@ -695,7 +715,7 @@ uint8_t msg_scan( struct message *msg, uint8_t byte ) {
     if( msg->state != S_CHECKSUM ) {
       nChar = 0;
       msg->rxFields |= msg->fields;
-	  msg->error = MSG_BAD_TX;
+      msg->error = MSG_BAD_TX;
       return 1;
     } else {
       byte = '\0';
@@ -703,7 +723,7 @@ uint8_t msg_scan( struct message *msg, uint8_t byte ) {
   }
 
   if( msg->nBytes<MAX_RAW )
-    msg->raw[msg->nBytes++] = byte;
+	msg->raw[msg->nBytes++] = byte;
 
   // Discard to end of line
   if( msg->state == S_ERROR )
@@ -731,7 +751,6 @@ uint8_t msg_scan( struct message *msg, uint8_t byte ) {
           msg->state = S_CHECKSUM;
         }
       }
-
     } else { // wait for second byte
       return 0;
     }
@@ -799,6 +818,7 @@ static uint8_t msg_tx_addr( struct message *msg, uint8_t *done ) {
   if( msg->fields & ( F_ADDR0 << addr ) ) {
     if( msg->count < 3 ) {
       byte = msg->addr[ addr ][ msg->count ];
+      ESP_LOGI(TAG, "TX ADDR[%d][%d]=%02x",addr,msg->count,byte);
       msg->count++;
     } else {
       msg->count = 0;
@@ -817,6 +837,7 @@ static uint8_t msg_tx_param( struct message *msg, uint8_t *done  ) {
   if( msg->fields & ( F_PARAM0 << param ) ) {
     if( msg->count < 1 ) {
       byte = msg->param[ param ];
+      ESP_LOGI(TAG, "TX PARAM[%d]=%02x",param,byte);
       msg->count++;
     } else {
       msg->count = 0;
@@ -833,6 +854,7 @@ static uint8_t msg_tx_opcode( struct message *msg, uint8_t *done ) {
 
   if( msg->count < 2 ) {
     byte = msg->opcode[ msg->count ];
+    ESP_LOGI(TAG, "TX OPCODE[%d]=%02x",msg->count,byte);
     msg->count++;
   } else {
     msg->count = 0;
@@ -848,6 +870,7 @@ static uint8_t msg_tx_len( struct message *msg, uint8_t *done ) {
 
   if( msg->count < 1 ) {
     byte = msg->len;
+    ESP_LOGI(TAG, "TX len=%03d",byte);
     msg->count++;
   } else {
     msg->count = 0;
@@ -863,6 +886,7 @@ static uint8_t msg_tx_payload( struct message *msg, uint8_t *done ) {
 
   if( msg->count < msg->len ) {
     byte = msg->payload[ msg->count ];
+    ESP_LOGI(TAG, "TX payload[%d]=%02x",msg->count,byte);
     msg->count++;
   } else {
     msg->count = 0;
@@ -878,6 +902,7 @@ static uint8_t msg_tx_checksum( struct message *msg, uint8_t *done ) {
 
   if( msg->count < 1 ) {
     byte = msg->csum;
+    ESP_LOGI(TAG, "TX csum=%02x",byte);
     msg->count++;
   } else {
     msg->count = 0;
@@ -918,7 +943,7 @@ static struct message *TxMsg;
 static void msg_tx_start( struct message **msg ) {
   if( msg && (*msg) ) {
     TxMsg = (*msg);
-	TxMsg->csum = msg_checksum( TxMsg );
+    TxMsg->csum = msg_checksum( TxMsg );
     frame_tx_start( TxMsg->raw, MAX_RAW );
     (*msg) = NULL;
   }

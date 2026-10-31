@@ -196,10 +196,40 @@ static void gateway_register_tx(void) {
         .func = &gateway_radio_tx,
     };
 
+    const esp_console_cmd_t i_ = {
+        .command = "I*",
+        .help = "Send I message (R3)",
+        .hint = NULL,
+        .func = &gateway_radio_tx,
+    };
+    const esp_console_cmd_t w_ = {
+        .command = "W*",
+        .help = "Send W message (R3)",
+        .hint = NULL,
+        .func = &gateway_radio_tx,
+    };
+    const esp_console_cmd_t rq_ = {
+        .command = "RQ*",
+        .help = "Send RQ message (R3)",
+        .hint = NULL,
+        .func = &gateway_radio_tx,
+    };
+    const esp_console_cmd_t rp_ = {
+        .command = "RP*",
+        .help = "Send RP message (R3)",
+        .hint = NULL,
+        .func = &gateway_radio_tx,
+    };
+
     ESP_ERROR_CHECK( esp_console_cmd_register(&i ) );
     ESP_ERROR_CHECK( esp_console_cmd_register(&w ) );
     ESP_ERROR_CHECK( esp_console_cmd_register(&rq) );
     ESP_ERROR_CHECK( esp_console_cmd_register(&rp) );
+
+    ESP_ERROR_CHECK( esp_console_cmd_register(&i_ ) );
+    ESP_ERROR_CHECK( esp_console_cmd_register(&w_ ) );
+    ESP_ERROR_CHECK( esp_console_cmd_register(&rq_) );
+    ESP_ERROR_CHECK( esp_console_cmd_register(&rp_) );
 }
 
 /*************************************************************************
