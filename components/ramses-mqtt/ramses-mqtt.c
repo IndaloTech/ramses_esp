@@ -25,6 +25,7 @@ static const char *TAG = "MQTT";
 #include "gateway.h"
 #include "ramses_wifi.h"
 #include "ramses-mqtt.h"
+#include "ramses_sntp.h"
 
 /****************************************************
  * States
@@ -225,7 +226,7 @@ static void mqtt_publish_rx( struct mqtt_data *ctxt, char const *ts, char const 
 
 void MQTT_publish_rx( char const *ts, char const *msg ) {
   struct mqtt_data *ctxt= mqtt_ctxt();
-  if( ctxt->state == MQTT_ACTIVE )
+  if( ctxt->state == MQTT_ACTIVE && ramses_sntp_status() )
     mqtt_publish_rx( ctxt, ts, msg );
 }
 

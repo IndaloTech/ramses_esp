@@ -67,6 +67,8 @@ struct sntp_data {
   bool serverReset;
   bool serverValid;
   char server[32];
+
+  bool serverStatus;
 };
 
 #define NULL_SERVER "0.0.0.0"
@@ -75,7 +77,8 @@ static struct sntp_data *sntp_ctxt(void) {
   static struct sntp_data data = {
     .serverReset = false,
     .serverValid = false,
-    .server = NULL_SERVER
+    .server = NULL_SERVER,
+    .serverStatus = false
   };
 
   static struct sntp_data *ctxt = NULL;
@@ -153,7 +156,7 @@ static esp_err_t Sntp_start( struct sntp_data *ctxt ) {
 
 static void Sntp_stop( struct sntp_data *ctxt ) {
   ESP_LOGI(TAG, "Stopping <%s>",ctxt->server );
-
+  ctxt->serverStatus = false;
   esp_netif_sntp_deinit();
 }
 
@@ -213,6 +216,8 @@ static bool sntp_state_machine( struct sntp_data *ctxt ) {
       localtime_r(&now, &timeinfo);
       strftime( strftime_buf, sizeof(strftime_buf), "%Y-%m-%d %H:%M:%S", &timeinfo );
 
+      ctxt->serverStatus = true;
+
       ESP_LOGI(TAG, "The current date/time is: %s", strftime_buf);
     }
     sntp_set_state( ctxt, SNTP_STARTING );
@@ -261,6 +266,15 @@ static bool sntp_set_server( struct sntp_data *ctxt, char *server ) {
   return result;
 }
 
+static bool sntp_status( struct sntp_data *ctxt ) {
+  bool result = false;
+  if( ctxt ) {
+    result = ctxt->serverStatus;
+  }
+
+  return result;
+}
+
 /************************************************************
  * SNTP external api
  *
@@ -269,6 +283,11 @@ static bool sntp_set_server( struct sntp_data *ctxt, char *server ) {
 bool ramses_sntp_set_server( char *server ) {
   struct sntp_data *ctxt = sntp_ctxt();
   return sntp_set_server( ctxt, server );
+}
+
+bool ramses_sntp_status( void ) {
+  struct sntp_data *ctxt = sntp_ctxt();
+  return sntp_status( ctxt );
 }
 
 void ramses_sntp_init( BaseType_t coreID, char *server ) {
