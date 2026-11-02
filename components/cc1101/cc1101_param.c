@@ -17,7 +17,7 @@ static inline uint8_t cc1101_cfg_default( uint8_t *cfg ) {
     0x0D,  //  CC_IOCFG2 	  GDO2- RX data
     0x2E,  //  CC_IOCFG1 	  GDO1- not used
     0x2E,  //  CC_IOCFG0	  GDO0- TX data
-    0x07,  //  CC_FIFOTHR   default
+    0x09,  //  CC_FIFOTHR   default
     0xD3,  //  CC_SYNC1     default
     0x91,  //  CC_SYNC0     default
     0xFF,  //  CC_PKTLEN	  default
