@@ -89,7 +89,8 @@ static struct mqtt_data *mqtt_ctxt( void ) {
 		  .keepalive=20,
       },
     },
-	  .info = 0,
+    .client = NULL,
+    .info = 0,
   };
 
   static struct mqtt_data *ctxt = NULL;
@@ -137,13 +138,13 @@ static bool mqtt_broker_configured( struct mqtt_data *ctxt ) {
   return res;
 }
 
-static void mqtt_set_state( struct mqtt_data *ctxt, enum mqtt_state newState ) {
-  if( ctxt ) {
-    if( ctxt->state != newState ) {
-      ESP_LOGI( TAG, "state %s->%s ", mqtt_state_text(ctxt->state), mqtt_state_text(newState) );
-      ctxt->state = newState;
-    }
+static bool mqtt_connected( struct mqtt_data *ctxt ) {
+  bool connected = false;
+  if( ctxt && ctxt->client!=NULL ) {
+    esp_mqtt_client_connection_state_t state = esp_mqtt_client_get_state( ctxt->client );
+    connected = ( state == MQTT_CLIENT_STATE_CONNECTED );
   }
+  return connected;
 }
 
 /****************************************************
@@ -201,7 +202,6 @@ void MQTT_publish_latest( char const *latest ) {
 
 }
 
-
 /*******************************************************************************
  * RX message
  */
@@ -218,7 +218,7 @@ static void mqtt_publish_rx( struct mqtt_data *ctxt, char const *ts, char const 
 
   rx = cJSON_Print( json );
   sprintf( topic, "%s/rx", ctxt->topic );
-  esp_mqtt_client_publish( ctxt->client,topic, rx, 0, 1, 0 );
+  esp_mqtt_client_enqueue( ctxt->client,topic, rx, 0, 1, 0, 1 );
 
   cJSON_Delete( json );
   free(rx);
@@ -226,7 +226,7 @@ static void mqtt_publish_rx( struct mqtt_data *ctxt, char const *ts, char const 
 
 void MQTT_publish_rx( char const *ts, char const *msg ) {
   struct mqtt_data *ctxt= mqtt_ctxt();
-  if( ctxt->state == MQTT_ACTIVE && ramses_sntp_status() )
+  if( mqtt_connected(ctxt) && ramses_sntp_status() )
     mqtt_publish_rx( ctxt, ts, msg );
 }
 
@@ -237,12 +237,6 @@ static void mqtt_subscribe_tx( struct mqtt_data *ctxt ) {
   char topic[64];
   sprintf( topic, "%s/tx", ctxt->topic );
   esp_mqtt_client_subscribe( ctxt->client, topic, 0);
-}
-
-static void mqtt_unsubscribe_tx( struct mqtt_data *ctxt ) {
-  char topic[64];
-  sprintf( topic, "%s/tx", ctxt->topic );
-  esp_mqtt_client_unsubscribe( ctxt->client, topic );
 }
 
 static void mqtt_process_tx( struct mqtt_data *ctxt, char const *data, int dataLen ) {
@@ -269,17 +263,10 @@ static void mqtt_publish_cmd( struct mqtt_data *ctxt ) {
   esp_mqtt_client_publish( ctxt->client,topic, NULL, 0, 0, 0);
 }
 
-
 static void mqtt_subscribe_cmd( struct mqtt_data *ctxt ) {
   char topic[64];
   sprintf( topic, "%s/cmd/cmd", ctxt->topic );
   esp_mqtt_client_subscribe( ctxt->client, topic, 2 );
-}
-
-static void mqtt_unsubscribe_cmd( struct mqtt_data *ctxt ) {
-  char topic[64];
-  sprintf( topic, "%s/cmd/cmd", ctxt->topic );
-  esp_mqtt_client_unsubscribe( ctxt->client, topic );
 }
 
 static void mqtt_publish_cmd_result( struct mqtt_data *ctxt, char const *cmd, esp_err_t err, int retVal ) {
@@ -343,6 +330,19 @@ static void mqtt_process_data( struct mqtt_data *ctxt, esp_mqtt_event_handle_t e
 
 }
 
+/*******************************************************************************
+ * MQTT state machine
+ */
+
+static void mqtt_set_state( struct mqtt_data *ctxt, enum mqtt_state newState ) {
+  if( ctxt ) {
+    if( ctxt->state != newState ) {
+      ESP_LOGI( TAG, "state %s->%s ", mqtt_state_text(ctxt->state), mqtt_state_text(newState) );
+      ctxt->state = newState;
+    }
+  }
+}
+
 static void mqtt_event_handler( void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data )
 {
   struct mqtt_data *ctxt = handler_args;
@@ -397,29 +397,35 @@ static void mqtt_event_handler( void *handler_args, esp_event_base_t base, int32
 static void mqtt_state_machine( struct mqtt_data *ctxt ) {
 
   switch( ctxt->state ){
+
   case MQTT_IDLE:
-    if( mqtt_broker_configured( ctxt ) ) {
-    	mqtt_set_state( ctxt,MQTT_WAIT );
+    if( ctxt->topic[0]=='\0' ) {
+      char const *dev = device();
+      if( dev[0]!='\0' ) {
+        sprintf( ctxt->topic,"%s/%s",ctxt->root,dev );
+        ESP_LOGI( TAG, "Set topic <%s>",ctxt->topic );
+      } 
+    } else if( ctxt->client==NULL ) {
+      if( mqtt_broker_configured( ctxt ) ) {
+        ctxt->client = esp_mqtt_client_init( &ctxt->cfg );
+      }
+    } else {
+      esp_mqtt_client_register_event( ctxt->client, ESP_EVENT_ANY_ID, mqtt_event_handler, ctxt );
+      mqtt_set_state( ctxt,MQTT_WAIT );
     }
     break;
 
   case MQTT_WAIT:
-	if( wifi_is_connected() )
+    if( wifi_is_connected() )
       mqtt_set_state( ctxt,MQTT_START );
-	break;
+    break;
 
   case MQTT_START:
-	char const *dev = device();
-	if( dev[0] ) {
-      sprintf( ctxt->topic,"%s/%s",ctxt->root,dev );
-      ctxt->info = 0;
-      ctxt->client = esp_mqtt_client_init( &ctxt->cfg );
-      ESP_LOGI( TAG, "Connecting to %s",ctxt->cfg.broker.address.uri );
-      printf("# MQTT: Connecting to %s\n",ctxt->cfg.broker.address.uri );
-      esp_mqtt_client_register_event( ctxt->client, ESP_EVENT_ANY_ID, mqtt_event_handler, ctxt );
-      esp_mqtt_client_start( ctxt->client );
-      mqtt_set_state( ctxt,MQTT_STARTING );
-	}
+    ctxt->info = 0;
+    ESP_LOGI( TAG, "Connecting to %s",ctxt->cfg.broker.address.uri );
+    printf("# MQTT: Connecting to %s\n",ctxt->cfg.broker.address.uri );
+    esp_mqtt_client_start( ctxt->client );
+    mqtt_set_state( ctxt,MQTT_STARTING );
     break;
 
   case MQTT_STARTING:
@@ -431,7 +437,7 @@ static void mqtt_state_machine( struct mqtt_data *ctxt ) {
     mqtt_subscribe_tx( ctxt );
     mqtt_publish_cmd( ctxt );  // Clear old CMD
     mqtt_subscribe_cmd( ctxt );
-	mqtt_set_state( ctxt,MQTT_ACTIVE );
+    mqtt_set_state( ctxt,MQTT_ACTIVE );
     break;
 
   case MQTT_ACTIVE:
@@ -440,9 +446,6 @@ static void mqtt_state_machine( struct mqtt_data *ctxt ) {
     break;
 
   case MQTT_DISCONNECTED:
-    mqtt_unsubscribe_tx( ctxt );
-    mqtt_unsubscribe_cmd( ctxt );
-    esp_mqtt_client_unregister_event( ctxt->client, ESP_EVENT_ANY_ID, mqtt_event_handler );
     esp_mqtt_client_stop( ctxt->client );
     mqtt_set_state( ctxt,MQTT_WAIT );
     break;
@@ -456,18 +459,19 @@ static void Mqtt( void *param ) {
   struct mqtt_data *ctxt = param;
 
   ESP_LOGI( TAG, "Task Started");
+  vTaskDelay( 5000/portTICK_PERIOD_MS );
 
   do {
-	mqtt_state_machine( ctxt );
+	  mqtt_state_machine( ctxt );
     vTaskDelay( 50/portTICK_PERIOD_MS );
   } while(1);
 }
 
 MQTT_HNDL ramses_mqtt_init( BaseType_t coreID ) {
   struct mqtt_data *ctxt= mqtt_ctxt();
-  ctxt->coreID = coreID;
-
   esp_log_level_set(TAG, CONFIG_MQTT_LOG_LEVEL );
+
+  ctxt->coreID = coreID;
 
   xTaskCreatePinnedToCore( Mqtt, "MQTT", 4096, ctxt, 10, &ctxt->task, ctxt->coreID );
 
