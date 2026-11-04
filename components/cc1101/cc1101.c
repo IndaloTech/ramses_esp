@@ -134,6 +134,7 @@ uint8_t cc_write_fifo(uint8_t b) {
 
 void cc_enter_idle_mode(void) {
   while ( CC_STATE( cc_strobe( CC_SIDLE ) ) != CC_STATE_IDLE );
+  ESP_LOGI( TAG, "idle mode");
 }
 
 void cc_enter_rx_mode(void) {
@@ -144,6 +145,7 @@ void cc_enter_rx_mode(void) {
 
   cc_strobe( CC_SFRX );
   while ( CC_STATE( cc_strobe( CC_SRX ) ) != CC_STATE_RX ){}
+  ESP_LOGI( TAG, "rx mode");
 }
 
 void cc_enter_tx_mode(void) {
@@ -154,6 +156,7 @@ void cc_enter_tx_mode(void) {
 
   cc_strobe( CC_SFTX );
   while ( CC_STATE( cc_strobe( CC_STX ) ) != CC_STATE_TX ){}
+  ESP_LOGI( TAG, "tx mode");
 }
 
 void cc_fifo_end(void) {

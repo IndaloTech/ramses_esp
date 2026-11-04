@@ -244,12 +244,12 @@ static void frame_rx_done(void) {
   led_off(LED_RX);
 
   frame_rx_reset();
-
   DEBUG_FRAME(1);
   led_on(LED_RX);
 
   // Now tell message about the end of frame
   rssi = cc_read_rssi();
+  ESP_LOGI( TAG, "%s: rssi=%3d",__FUNCTION__,rssi );
   msg_rx_rssi( rssi );
   msg_rx_end(nBytes,msgErr);
 
@@ -257,6 +257,8 @@ static void frame_rx_done(void) {
 
   DEBUG_FRAME(0);
   led_off(LED_RX);
+  ESP_LOGI( TAG, "RX: END");
+
 }
 
 /***************************************************************************
@@ -525,6 +527,7 @@ uint8_t frame_tx_byte(uint8_t *byte) {
 
   switch( txFrm.state ) {
   case FRM_TX_IDLE:
+    ESP_LOGI( TAG, "TX: PREFIX" );
     txFrm.state = FRM_TX_PREFIX;
     // Fall through
 
@@ -535,6 +538,7 @@ uint8_t frame_tx_byte(uint8_t *byte) {
     }
     txFrm.count = 0;
     txFrm.state = FRM_TX_MESSAGE;
+    ESP_LOGI( TAG, "TX: MESSAGE" );
     // Fall through
 
   case FRM_TX_MESSAGE:
@@ -547,6 +551,7 @@ uint8_t frame_tx_byte(uint8_t *byte) {
 
     txFrm.count = 0;
     txFrm.state = FRM_TX_SUFFIX;
+    ESP_LOGI( TAG, "TX: SUFFIX" );
     // Fall through
 
   case FRM_TX_SUFFIX:
@@ -560,6 +565,7 @@ uint8_t frame_tx_byte(uint8_t *byte) {
 
     txFrm.count = 0;
     txFrm.state = FRM_TX_DONE;
+    ESP_LOGI( TAG, "TX: DONE" );
     // Fall through
 
   case FRM_TX_DONE:
@@ -660,6 +666,7 @@ void frame_work(void) {
    	  uint64_t now = frm_time();
       if( ( now - last_frm ) > CONFIG_FRM_MIN_TX_DELAY ) {
         if( txFrm.state==FRM_TX_READY ) {
+          ESP_LOGI( TAG, "TX: START");
           led_on(LED_TX);
           frame_tx_enable();
           break;
@@ -683,6 +690,7 @@ void frame_work(void) {
     if( txFrm.state>=FRM_TX_DONE ) {
       led_off(LED_TX);
       frame_tx_done();
+      ESP_LOGI( TAG, "TX: END");
       frame_rx_enable();
       break;
     }
