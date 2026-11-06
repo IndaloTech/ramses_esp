@@ -137,13 +137,34 @@ void cc_enter_idle_mode(void) {
 }
 
 void cc_enter_rx_mode(void) {
-  while ( CC_STATE( cc_strobe( CC_SIDLE ) ) != CC_STATE_IDLE ){}
+   uint8_t state;
+   int attempt = 0;
+   
+   ESP_LOGI( TAG, "RX: Waiting for IDLE state" );
+   while ( (state = CC_STATE( cc_strobe( CC_SIDLE ) )) != CC_STATE_IDLE ) {
+      attempt++;
+      if (attempt > 100) {
+         ESP_LOGE( TAG, "RX: TIMEOUT waiting for IDLE state, got %d", state );
+         break;
+      }
+   }
+   if (attempt <= 100) ESP_LOGI( TAG, "RX: IDLE reached in %d attempts", attempt );
 
-  cc_write( CC_IOCFG0, 0x2E );      // GDO0 not needed
-  cc_write( CC_PKTCTRL0, 0x32 );	// Asynchronous, infinite packet
+   cc_write( CC_IOCFG0, 0x2E );      // GDO0 not needed
+   cc_write( CC_PKTCTRL0, 0x32 );	// Asynchronous, infinite packet
 
-  cc_strobe( CC_SFRX );
-  while ( CC_STATE( cc_strobe( CC_SRX ) ) != CC_STATE_RX ){}
+   cc_strobe( CC_SFRX );
+   
+   ESP_LOGI( TAG, "RX: Waiting for RX state" );
+   attempt = 0;
+   while ( (state = CC_STATE( cc_strobe( CC_SRX ) )) != CC_STATE_RX ) {
+      attempt++;
+      if (attempt > 100) {
+         ESP_LOGE( TAG, "RX: TIMEOUT waiting for RX state, got %d", state );
+         break;
+      }
+   }
+   if (attempt <= 100) ESP_LOGI( TAG, "RX: RX state reached in %d attempts", attempt );
 }
 
 void cc_enter_tx_mode(void) {
