@@ -15,6 +15,8 @@
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 
 static const char * TAG = "MSG";
 #include "esp_log.h"
@@ -41,10 +43,13 @@ struct msg_list {
   struct message *out;
 };
 
+// Pool and TX lists are shared by the radio and host cores.
+static portMUX_TYPE msg_list_lock = portMUX_INITIALIZER_UNLOCKED;
+
 static void msg_put( struct msg_list *list, struct message **ppMsg, uint8_t reset ) {
   struct message *pMsg = NULL;
   if( ppMsg && list ) {
-    uint32_t volatile register ilevel = XTOS_DISABLE_ALL_INTERRUPTS;
+    portENTER_CRITICAL( &msg_list_lock );
     pMsg = (*ppMsg);
     if( pMsg ) {
 
@@ -62,26 +67,28 @@ static void msg_put( struct msg_list *list, struct message **ppMsg, uint8_t rese
 
       (*ppMsg) = NULL;
     }
-    XTOS_RESTORE_INTLEVEL(ilevel);
+    portEXIT_CRITICAL( &msg_list_lock );
   }
 }
 
 static struct message *msg_get( struct msg_list *list ) {
   struct message *pMsg = NULL;
   if( list ) {
-    uint32_t volatile register ilevel = XTOS_DISABLE_ALL_INTERRUPTS;
+    portENTER_CRITICAL( &msg_list_lock );
     pMsg = list->out;
 
     if( pMsg ) {
       list->out = pMsg->next;
       if( !list->out )      // message was last in list
         list->in = NULL;    // So list is empty
+      else
+        list->out->prev = NULL;
 
       pMsg->prev = pMsg->next = NULL;
 
       pMsg->state = S_START;
     }
-    XTOS_RESTORE_INTLEVEL(ilevel);
+    portEXIT_CRITICAL( &msg_list_lock );
   }
 
   return pMsg;
@@ -951,6 +958,11 @@ void msg_tx_done(void) {
     // Echo what we transmitted
     msg_rx_ready( &TxMsg );
   }
+}
+
+void msg_tx_abort(void) {
+  // A failed/partial transmission must not be echoed as a successful TX.
+  msg_free( &TxMsg );
 }
 
 /************************************************************************************

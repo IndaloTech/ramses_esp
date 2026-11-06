@@ -9,6 +9,9 @@
  */
 #include <driver/spi_master.h>
 #include <driver/gpio.h>
+#include <string.h>
+#include "esp_timer.h"
+#include "esp_rom_sys.h"
 
 #define TAG "CC1101"
 #include "esp_log.h"
@@ -43,6 +46,7 @@ static spi_device_interface_config_t const cc_devcfg = {
 };
 
 static spi_device_handle_t cc_handle;
+static bool cc_io_ok = true;
 
 static void cc_spi_init() {
   esp_err_t ret;
@@ -58,31 +62,41 @@ static void cc_spi_init() {
 
 static bool spi_write_byte(uint8_t *status, uint8_t* Dataout, size_t DataLength )
 {
-  if ( DataLength > 0 ) {
-    spi_transaction_t SPITransaction = {
-      .length = DataLength * 8,
-	  .tx_buffer = Dataout,
-	  .rx_buffer = status
-	};
-
-	spi_device_transmit( cc_handle, &SPITransaction );
+  // The status destination is one byte even for a two-byte register write.
+  // Receive the whole transfer inline, then copy only the chip status byte.
+  spi_transaction_t transaction = {
+    .flags = SPI_TRANS_USE_TXDATA | SPI_TRANS_USE_RXDATA,
+    .length = DataLength * 8,
+  };
+  assert( DataLength > 0 && DataLength <= sizeof(transaction.tx_data) );
+  memcpy( transaction.tx_data, Dataout, DataLength );
+  esp_err_t err = spi_device_transmit( cc_handle, &transaction );
+  if( err != ESP_OK ) {
+    cc_io_ok = false;
+    *status = 0xFF;
+    ESP_LOGE( TAG, "SPI write failed: %s", esp_err_to_name(err) );
+    return false;
   }
-
+  *status = transaction.rx_data[0];
   return true;
 }
 
 static bool spi_read_byte(uint8_t* Datain, uint8_t* Dataout, size_t DataLength )
 {
-  if ( DataLength > 0 ) {
-	spi_transaction_t SPITransaction = {
-	  .length = DataLength * 8,
-	  .tx_buffer = Dataout,
-	  .rx_buffer = Datain
-	};
-
-	spi_device_transmit( cc_handle, &SPITransaction );
+  spi_transaction_t transaction = {
+    .flags = SPI_TRANS_USE_TXDATA | SPI_TRANS_USE_RXDATA,
+    .length = DataLength * 8,
+  };
+  assert( DataLength > 0 && DataLength <= sizeof(transaction.tx_data) );
+  memcpy( transaction.tx_data, Dataout, DataLength );
+  esp_err_t err = spi_device_transmit( cc_handle, &transaction );
+  if( err != ESP_OK ) {
+    cc_io_ok = false;
+    memset( Datain, 0xFF, DataLength );
+    ESP_LOGE( TAG, "SPI read failed: %s", esp_err_to_name(err) );
+    return false;
   }
-
+  memcpy( Datain, transaction.rx_data, DataLength );
   return true;
 }
 
@@ -125,6 +139,8 @@ uint8_t cc_strobe( uint8_t cmd )
 
 uint8_t cc_write_fifo(uint8_t b) {
   uint8_t result = cc_write( CC_FIFO, b );
+  if( (result & CC_CHIP_RDY) || CC_STATE(result) == CC_STATE_TX_UNDERFLOW )
+    cc_io_ok = false;
   return result & 0x0F;	// TX fifo space
 }
 
@@ -132,49 +148,65 @@ uint8_t cc_write_fifo(uint8_t b) {
  * CC1101 Mode control
  */
 
-void cc_enter_idle_mode(void) {
-  while ( CC_STATE( cc_strobe( CC_SIDLE ) ) != CC_STATE_IDLE );
+static bool cc_wait_state( uint8_t expected ) {
+  int64_t deadline = esp_timer_get_time() + 20000;
+  uint8_t status;
+  do {
+    status = cc_strobe( CC_SNOP );
+    if( !cc_io_ok ) return false;
+    if( !(status & CC_CHIP_RDY) && CC_STATE(status) == expected ) return true;
+    esp_rom_delay_us( 20 );
+  } while( esp_timer_get_time() < deadline );
+  ESP_LOGE( TAG, "Mode timeout: expected 0x%02x, status 0x%02x", expected, status );
+  return false;
 }
 
-void cc_enter_rx_mode(void) {
-   uint8_t state;
-   int attempt = 0;
-   
-   ESP_LOGI( TAG, "RX: Waiting for IDLE state" );
-   while ( (state = CC_STATE( cc_strobe( CC_SIDLE ) )) != CC_STATE_IDLE ) {
-      attempt++;
-      if (attempt > 100) {
-         ESP_LOGE( TAG, "RX: TIMEOUT waiting for IDLE state, got %d", state );
-         break;
-      }
-   }
-   if (attempt <= 100) ESP_LOGI( TAG, "RX: IDLE reached in %d attempts", attempt );
-
-   cc_write( CC_IOCFG0, 0x2E );      // GDO0 not needed
-   cc_write( CC_PKTCTRL0, 0x32 );	// Asynchronous, infinite packet
-
-   cc_strobe( CC_SFRX );
-   
-   ESP_LOGI( TAG, "RX: Waiting for RX state" );
-   attempt = 0;
-   while ( (state = CC_STATE( cc_strobe( CC_SRX ) )) != CC_STATE_RX ) {
-      attempt++;
-      if (attempt > 100) {
-         ESP_LOGE( TAG, "RX: TIMEOUT waiting for RX state, got %d", state );
-         break;
-      }
-   }
-   if (attempt <= 100) ESP_LOGI( TAG, "RX: RX state reached in %d attempts", attempt );
+bool cc_enter_idle_mode(void) {
+  cc_io_ok = true; // Allow a new recovery attempt after a failed transfer.
+  cc_strobe( CC_SIDLE );
+  return cc_wait_state( CC_STATE_IDLE );
 }
 
-void cc_enter_tx_mode(void) {
-  while ( CC_STATE( cc_strobe( CC_SIDLE ) ) != CC_STATE_IDLE ){}
-
-  cc_write( CC_PKTCTRL0, 0x02 );    // Fifo mode, infinite packet
-  cc_write( CC_IOCFG0, 0x02 );      // Falling edge, TX Fifo low
-
+bool cc_enter_rx_mode(void) {
+  if( !cc_enter_idle_mode() ) return false;
+  // Clear both FIFOs, including a previous TX-underflow condition.
   cc_strobe( CC_SFTX );
-  while ( CC_STATE( cc_strobe( CC_STX ) ) != CC_STATE_TX ){}
+  cc_strobe( CC_SFRX );
+  cc_write( CC_IOCFG0, 0x2E );      // GDO0 not needed
+  cc_write( CC_PKTCTRL0, 0x32 );    // Asynchronous, infinite packet
+  cc_strobe( CC_SRX );
+  return cc_wait_state( CC_STATE_RX );
+}
+
+bool cc_enter_tx_mode(void) {
+  if( !cc_enter_idle_mode() ) return false;
+  cc_write( CC_PKTCTRL0, 0x02 );    // FIFO mode, infinite packet
+  cc_write( CC_IOCFG0, 0x02 );      // Falling edge, TX FIFO low
+  cc_strobe( CC_SFTX );
+  // Stay IDLE until the frame layer has primed the FIFO.
+  return cc_io_ok;
+}
+
+bool cc_start_tx(void) {
+  if( !cc_io_ok ) return false;
+  cc_strobe( CC_STX );
+  return cc_wait_state( CC_STATE_TX );
+}
+
+bool cc_tx_status( uint8_t *bytes, bool *underflow ) {
+  uint8_t status = cc_read( CC_TXBYTES );
+  // TXBYTES is updated asynchronously. Require two matching reads.
+  for( unsigned i=0; i<4; i++ ) {
+    uint8_t next = cc_read( CC_TXBYTES );
+    if( !cc_io_ok ) return false;
+    if( next == status ) {
+      *bytes = status & 0x7F;
+      *underflow = (status & 0x80) != 0;
+      return true;
+    }
+    status = next;
+  }
+  return false;
 }
 
 void cc_fifo_end(void) {

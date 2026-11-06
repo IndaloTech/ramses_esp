@@ -39,6 +39,7 @@ extern void msg_rx_rssi( uint8_t rssi );
 extern uint8_t msg_tx_byte(uint8_t *done);
 extern void msg_tx_end( uint8_t nBytes );
 extern void msg_tx_done(void);
+extern void msg_tx_abort(void);
 
 /******************************************
 ** Application interface

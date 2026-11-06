@@ -17,7 +17,9 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include <sys/time.h>
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include <driver/uart.h>
 
@@ -35,15 +37,18 @@ static const char * TAG = "FRM";
 #define DEBUG_FRAME(_i)   //do{if(_i)DEBUG1_ON;else DEBUG1_OFF;}while(0)
 
 static uint64_t frm_time(void) {
-  uint64_t ts;
-  struct timeval tv;
-  gettimeofday( &tv, NULL );
-  ts = tv.tv_sec * 1000LL + (tv.tv_usec / 1000LL);
-  return ts;
+  // Radio deadlines must not jump when SNTP adjusts the wall clock.
+  return esp_timer_get_time() / 1000;
 }
 
 static uint64_t last_frm;
 static uint64_t last_cal;
+static uint64_t next_rx_attempt;
+static uint64_t tx_started;
+#define RX_BYTE_TIMEOUT_MS 50
+#define RX_FRAME_TIMEOUT_MS 200
+#define TX_TIMEOUT_MS 500
+#define RX_RETRY_MS 500
 
 /***********************************************************************************
 ** Frame state machine
@@ -167,13 +172,23 @@ static struct rx_frame {
   uint8_t count;
   uint8_t msgErr;
   uint8_t msgByte;
+  uint64_t started;
+  uint64_t last_byte;
 } rxFrm;
+
+static void frame_rx_done(void);
 
 static void frame_rx_reset(void) {
   memset( &rxFrm, 0, sizeof(rxFrm) );
 }
 
 void frame_rx_byte( uint8_t b ) {
+  // A UART read can contain multiple frames. Finish the previous frame before
+  // consuming the next byte instead of dropping the rest of the UART batch.
+  if( rxFrm.state == FRM_RX_DONE ) {
+    frame_rx_done();
+    rxFrm.state = FRM_RX_IDLE;
+  }
   switch( rxFrm.state ) {
   case FRM_RX_OFF:
 	break;
@@ -187,6 +202,7 @@ void frame_rx_byte( uint8_t b ) {
       rxFrm.raw = msg_rx_start();
       if( rxFrm.raw ) {
         rxFrm.nRaw = rxFrm.raw[0];
+	    rxFrm.started = rxFrm.last_byte = frm_time();
 	    rxFrm.state  = FRM_RX_MESSAGE;
         DEBUG_FRAME(1);
         led_on(LED_RX);
@@ -195,11 +211,12 @@ void frame_rx_byte( uint8_t b ) {
     break;
 
   case FRM_RX_MESSAGE:
+    rxFrm.last_byte = frm_time();
     if( b == ramses_tlr[0] ) {
 	  rxFrm.state = FRM_RX_DONE;
       ESP_LOGI( TAG, "DONE raw=%d msg=%d",rxFrm.nBytes, 1 );
     } else {
-      ESP_LOGD( TAG, "raw[%d]=%02x",rxFrm.nBytes, b );
+      ESP_LOGV( TAG, "raw[%d]=%02x",rxFrm.nBytes, b );
       rxFrm.raw[rxFrm.nBytes++] = b;
 
       if( !manchester_code_valid( b ) ) {
@@ -231,6 +248,21 @@ void frame_rx_byte( uint8_t b ) {
   case FRM_RX_DONE:
   case FRM_RX_ABORT:
     break;
+  }
+}
+
+void frame_rx_error(void) {
+  // Called in the radio task, never from an ISR. Keep ownership of any partial
+  // message until frame_work reports and releases it through frame_rx_done.
+  if( rxFrm.state == FRM_RX_DONE ) {
+    frame_rx_done();
+    rxFrm.state = FRM_RX_IDLE;
+  }
+  if( rxFrm.state == FRM_RX_MESSAGE ) {
+    rxFrm.msgErr = MSG_TRUNC_ERR;
+    rxFrm.state = FRM_RX_ABORT;
+  } else {
+    rxFrm.syncBuffer = 0;
   }
 }
 
@@ -383,7 +415,9 @@ static uint8_t tx_fifo_send_block(void) {
   return done;
 }
 
-static void tx_fifo_prime( void ) {
+static void tx_fifo_fill(void);
+
+static bool tx_fifo_prime( void ) {
   // Not clear why but have to send a zero byte to start TX correctly
   cc_write_fifo( 0x00 );
 
@@ -395,8 +429,18 @@ static void tx_fifo_prime( void ) {
   // So we can see an interrupt when it falls below threshold
   // send sufficient data to fill FIFO above threshold
   txBits = 0;
-  while( !gpio_get_level( CONFIG_CC_GDO0_GPIO ) )
-    tx_fifo_send_block();
+  int64_t deadline = esp_timer_get_time() + 20000;
+  for( unsigned block=0; block<16; block++ ) {
+    if( gpio_get_level(CONFIG_CC_GDO0_GPIO) ) return true;
+    uint8_t bytes;
+    bool underflow;
+    if( !cc_tx_status(&bytes, &underflow) || underflow || bytes > 56 ) return false;
+    tx_fifo_fill();
+    // Short frames can finish before reaching the FIFO threshold.
+    if( tx_state == TX_FIFO_WAIT ) return true;
+    if( esp_timer_get_time() >= deadline ) return false;
+  }
+  return false;
 }
 
 static void tx_fifo_fill(void) {
@@ -404,11 +448,12 @@ static void tx_fifo_fill(void) {
 
   if( done ) {
     tx_flush();
-    cc_fifo_end();
     tx_state = TX_FIFO_WAIT;
 
-    // Switch to rising edge to detect FIFO empty
+    // Arm the new edge before changing the signal source. The worker also
+    // checks the level/status, so an edge while disabled cannot strand TX.
     gpio_set_intr_type( CONFIG_CC_GDO0_GPIO, GPIO_INTR_POSEDGE );
+    cc_fifo_end();
    }
 }
 
@@ -416,7 +461,9 @@ static void tx_fifo_fill(void) {
 
 static void IRAM_ATTR GDO0_ISR(void *args) {
   gpio_intr_disable( CONFIG_CC_GDO0_GPIO );
-  xQueueSendFromISR( tx_isr_queue, NULL, NULL );
+  BaseType_t woken = pdFALSE;
+  xQueueSendFromISR( tx_isr_queue, NULL, &woken );
+  if( woken ) portYIELD_FROM_ISR();
 }
 
 static void tx_fifo_init(void) {
@@ -425,32 +472,44 @@ static void tx_fifo_init(void) {
   gpio_pulldown_en( CONFIG_CC_GDO0_GPIO );
   gpio_pullup_dis( CONFIG_CC_GDO0_GPIO );
 
-  tx_isr_queue = xQueueCreate( 32, 0 );
-  gpio_install_isr_service(0);
+  tx_isr_queue = xQueueCreate( 1, 0 );
+  assert( tx_isr_queue );
+  // app_main installs the shared GPIO ISR service.
 }
 
-static void tx_fifo_start(void) {
+static bool tx_fifo_start(void) {
   // Falling edge for FIFO low
   gpio_set_intr_type( CONFIG_CC_GDO0_GPIO, GPIO_INTR_NEGEDGE );
 
-  tx_fifo_prime();
   tx_state = TX_FIFO_FILL;
+  xQueueReset( tx_isr_queue );
+  if( !tx_fifo_prime() ) return false;
 
-  gpio_isr_handler_add( CONFIG_CC_GDO0_GPIO, GDO0_ISR,  NULL );
+  if( gpio_isr_handler_add(CONFIG_CC_GDO0_GPIO, GDO0_ISR, NULL) != ESP_OK ) return false;
+  return cc_start_tx();
 }
 
-static void tx_fifo_work(void) {
-  if( xQueueReceive( tx_isr_queue, NULL, 0 )){
-    DEBUG_FRAME(0);
-    led_off(LED_TX);
-    switch(tx_state) {
-      case TX_FIFO_FILL:  tx_fifo_fill();  break;
-      case TX_FIFO_WAIT:  tx_fifo_wait();  break;
-    }
-    gpio_intr_enable( CONFIG_CC_GDO0_GPIO );
-    DEBUG_FRAME(1);
-    led_on(LED_TX);
+static bool tx_fifo_work(void) {
+  bool event = xQueueReceive( tx_isr_queue, NULL, 0 ) == pdTRUE;
+  bool level = gpio_get_level( CONFIG_CC_GDO0_GPIO ) != 0;
+  bool ready = tx_state == TX_FIFO_FILL ? !level : level;
+  if( !event && !ready ) return true;
+
+  uint8_t bytes;
+  bool underflow;
+  if( !cc_tx_status(&bytes, &underflow) ) return false;
+  if( underflow ) {
+    // Infinite-packet mode signals normal completion by underflow, but only
+    // after the entire suffix was queued. Earlier underflow is a failed TX.
+    if( tx_state != TX_FIFO_WAIT ) return false;
+    tx_fifo_wait();
+    return true; // Do not re-enable a handler that tx_fifo_wait removed.
   }
+
+  gpio_intr_disable( CONFIG_CC_GDO0_GPIO );
+  if( tx_state == TX_FIFO_FILL && bytes <= 32 ) tx_fifo_fill();
+  gpio_intr_enable( CONFIG_CC_GDO0_GPIO );
+  return true;
 }
 
 /***********************************************************************************
@@ -575,14 +634,32 @@ static void frame_tx_done(void) {
   frame_tx_reset();
 }
 
+static void frame_tx_abort(void) {
+  ESP_LOGE( TAG, "Aborting TX; restoring RX" );
+  tx_fifo_stop();
+  cc_enter_idle_mode();
+  msg_tx_abort();
+  frame_tx_reset();
+  last_frm = frm_time();
+  led_off(LED_TX);
+}
+
 /***************************************************************************
 ** External interface
 */
 
 static void frame_rx_enable(void) {
-  cc_enter_rx_mode();
+  uart_disable();
+  if( !cc_enter_rx_mode() ) {
+    frame.state = FRM_IDLE;
+    rxFrm.state = FRM_RX_OFF;
+    next_rx_attempt = frm_time() + RX_RETRY_MS;
+    ESP_LOGE( TAG, "RX entry failed; retrying in %d ms", RX_RETRY_MS );
+    return;
+  }
 
   frame.state = FRM_RX;
+  frame_rx_reset();
   rxFrm.state = FRM_RX_IDLE;
 
   uart_rx_enable();
@@ -592,7 +669,12 @@ static void frame_rx_enable(void) {
 
 static void frame_tx_enable(void) {
   uart_disable();
-  cc_enter_tx_mode();
+  tx_started = frm_time();
+  if( !cc_enter_tx_mode() ) {
+    frame_tx_abort();
+    frame_rx_enable();
+    return;
+  }
 
   frame.state = FRM_TX;
   txFrm.state = FRM_TX_IDLE;
@@ -600,11 +682,20 @@ static void frame_tx_enable(void) {
   // make sure we switch back to RX after TX
   rxFrm.state = FRM_RX_OFF;
 
-  tx_fifo_start();
+  if( !tx_fifo_start() ) {
+    frame_tx_abort();
+    frame_rx_enable();
+  }
 }
 
 void frame_disable(void) {
   uart_disable();
+  if( frame.state == FRM_TX ) frame_tx_abort();
+  if( rxFrm.state == FRM_RX_MESSAGE || rxFrm.state == FRM_RX_ABORT || rxFrm.state == FRM_RX_DONE ) {
+    frame_rx_error();
+    if( rxFrm.state == FRM_RX_ABORT ) frame_rx_done();
+  }
+  frame_rx_reset();
   cc_enter_idle_mode();
 
   frame.state = FRM_OFF;
@@ -637,12 +728,20 @@ void frame_work(void) {
 
   switch( frame.state ) {
   case FRM_IDLE:
-    if( rxFrm.state==FRM_RX_OFF ) {
+    if( frm_time() >= next_rx_attempt ) {
       frame_rx_enable();
+    } else {
+      vTaskDelay( pdMS_TO_TICKS(10) );
     }
     break;
 
   case FRM_RX:
+    if( rxFrm.state == FRM_RX_MESSAGE &&
+        (frm_time() - rxFrm.last_byte >= RX_BYTE_TIMEOUT_MS ||
+         frm_time() - rxFrm.started >= RX_FRAME_TIMEOUT_MS) ) {
+      ESP_LOGW( TAG, "RX frame timed out" );
+      frame_rx_error();
+    }
     if( rxFrm.state==FRM_RX_DONE ) {
       frame_rx_done();
       rxFrm.state = FRM_RX_IDLE;    // Avoid switch to IDLE and back to RX mode
@@ -687,7 +786,10 @@ void frame_work(void) {
       break;
     }
 
-    tx_fifo_work();
+    if( frm_time() - tx_started >= TX_TIMEOUT_MS || !tx_fifo_work() ) {
+      frame_tx_abort();
+      frame_rx_enable();
+    }
     break;
   }
 
