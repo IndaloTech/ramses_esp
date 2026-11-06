@@ -57,22 +57,15 @@ static void uart_work_off(void) {
 */
 
 static void uart_rx_flush(void) {
-  UBaseType_t nMsg = uxQueueMessagesWaiting(uartQ);
-  if( nMsg ) {
-    UBaseType_t i;
-    for( i=0 ; i<nMsg ; i++ ) {
-      uart_event_t event;
-      xQueueReceive( uartQ, &event, portTICK_PERIOD_MS  );
-    }
-  }
-
+  uart_disable_rx_intr(uart_num);
   uart_flush_input(uart_num);
+  xQueueReset(uartQ);
 }
 
 //---------------------------------------------------------------------------------
 
 static void rx_start(void) {
-  uart_flush_input(uart_num);
+  uart_rx_flush();
   uart_enable_rx_intr(uart_num);
   uart_rx_on = true;
 }
@@ -88,20 +81,36 @@ static void rx_stop(void) {
 
 static void uart_work_rx(void) {
   uart_event_t event = {0};
-  if( xQueueReceive( uartQ, &event, portTICK_PERIOD_MS  )) {
-	DEBUG_UART(1);
-    if( event.type==UART_DATA && event.size > 0 ) {
-      uint8_t dtmp[256];
-      int i,n;
-      n = uart_read_bytes( uart_num, dtmp, event.size, portTICK_PERIOD_MS/10 );
-      for( i=0 ; i<n ;  i++ ) {
-        DEBUG_DATA(1);
-        frame_rx_byte( dtmp[i] );
-        DEBUG_DATA(0);
-      }
+  // Events are wake-up hints, not an accounting of buffered bytes: the ISR can
+  // drop a notification when its queue is full. Always try a read, even when
+  // there was no event, so the driver's full-buffer stash can be recovered.
+  bool have_event = xQueueReceive( uartQ, &event, pdMS_TO_TICKS(10) ) == pdTRUE;
+  for( unsigned count=0; have_event && count<32; count++ ) {
+    if( event.type == UART_FIFO_OVF || event.type == UART_BUFFER_FULL ||
+        event.type == UART_FRAME_ERR || event.type == UART_PARITY_ERR ) {
+      ESP_LOGW( TAG, "RX stream error %d; flushing and resynchronizing", event.type );
+      frame_rx_error();
+      uart_rx_flush();
+      uart_enable_rx_intr(uart_num);
+      return;
     }
-    DEBUG_UART(0);
+    if( count + 1 < 32 )
+      have_event = xQueueReceive( uartQ, &event, 0 ) == pdTRUE;
   }
+
+  DEBUG_UART(1);
+  // Bound each pass so continuous noise cannot starve the frame deadlines.
+  for( unsigned chunk=0; chunk<4; chunk++ ) {
+    uint8_t data[128];
+    int n = uart_read_bytes( uart_num, data, sizeof(data), 0 );
+    if( n <= 0 ) break;
+    for( int i=0; i<n; i++ ) {
+      DEBUG_DATA(1);
+      frame_rx_byte( data[i] );
+      DEBUG_DATA(0);
+    }
+  }
+  DEBUG_UART(0);
 }
 
 /*******************************************************
@@ -172,8 +181,10 @@ void uart_init(void)
   };
 
   static uart_intr_config_t const uintr_cfg = {
-    .intr_enable_mask = UART_INTR_RXFIFO_FULL ,
-	.rxfifo_full_thresh = 1,
+    .intr_enable_mask = UART_INTR_RXFIFO_FULL | UART_INTR_RXFIFO_TOUT |
+                        UART_INTR_RXFIFO_OVF | UART_INTR_FRAM_ERR | UART_INTR_PARITY_ERR,
+    .rx_timeout_thresh = 2,
+    .rxfifo_full_thresh = 16,
   };
 
   esp_log_level_set(TAG, CONFIG_UART_LOG_LEVEL );
@@ -182,7 +193,7 @@ void uart_init(void)
   ESP_ERROR_CHECK( uart_param_config( uart_num, &uart_config ) );
 
   //Install UART driver, and get the queue.
-  ESP_ERROR_CHECK( uart_driver_install( uart_num, 256,0 , 16,&uartQ, 0 ) );
+  ESP_ERROR_CHECK( uart_driver_install( uart_num, 2048,0 , 32,&uartQ, 0 ) );
 
   ESP_ERROR_CHECK( uart_intr_config( uart_num, &uintr_cfg ) );
 
