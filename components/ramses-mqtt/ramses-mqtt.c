@@ -413,10 +413,10 @@ static void mqtt_state_machine( struct mqtt_data *ctxt ) {
 	if( dev[0] ) {
       sprintf( ctxt->topic,"%s/%s",ctxt->root,dev );
       ctxt->info = 0;
-      ctxt->client = esp_mqtt_client_init( &ctxt->cfg );
       ESP_LOGI( TAG, "Connecting to %s",ctxt->cfg.broker.address.uri );
       printf("# MQTT: Connecting to %s\n",ctxt->cfg.broker.address.uri );
       esp_mqtt_client_register_event( ctxt->client, ESP_EVENT_ANY_ID, mqtt_event_handler, ctxt );
+      esp_mqtt_set_config( ctxt->client, &ctxt->cfg );
       esp_mqtt_client_start( ctxt->client );
       mqtt_set_state( ctxt,MQTT_STARTING );
 	}
@@ -456,6 +456,8 @@ static void Mqtt( void *param ) {
   struct mqtt_data *ctxt = param;
 
   ESP_LOGI( TAG, "Task Started");
+
+  ctxt->client = esp_mqtt_client_init( &ctxt->cfg );
 
   do {
 	mqtt_state_machine( ctxt );
